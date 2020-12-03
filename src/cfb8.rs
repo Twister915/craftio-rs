@@ -2,9 +2,9 @@ use aes::{
     cipher::{consts::U16, generic_array::GenericArray, BlockCipherMut, NewBlockCipher},
     Aes128,
 };
-use thiserror::Error;
 #[cfg(feature = "backtrace")]
 use std::backtrace::Backtrace;
+use thiserror::Error;
 
 pub type CraftCipherResult<T> = Result<T, CipherError>;
 
@@ -26,7 +26,7 @@ pub enum CipherError {
         size: usize,
         component: CipherComponent,
         #[cfg(feature = "backtrace")]
-        backtrace: Backtrace
+        backtrace: Backtrace,
     },
 }
 
@@ -36,14 +36,14 @@ impl CipherError {
             component,
             size,
             #[cfg(feature = "backtrace")]
-            backtrace: Backtrace::capture()
+            backtrace: Backtrace::capture(),
         }
     }
 
     fn already_enabled() -> Self {
         CipherError::AlreadyEnabled {
             #[cfg(feature = "backtrace")]
-            backtrace: Backtrace::capture()
+            backtrace: Backtrace::capture(),
         }
     }
 }

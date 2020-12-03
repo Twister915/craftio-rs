@@ -8,7 +8,7 @@ use mcproto_rs::protocol::{Packet, RawPacket, State};
 #[cfg(any(feature = "futures-io", feature = "tokio-io"))]
 use {
     crate::{reader::CraftAsyncReader, writer::CraftAsyncWriter},
-    async_trait::async_trait
+    async_trait::async_trait,
 };
 
 pub struct CraftConnection<R, W> {

@@ -234,14 +234,16 @@ where
 
 #[cfg(any(feature = "futures-io", feature = "tokio-io"))]
 pub trait IntoBufferedAsyncRead {
-
     type Target: AsyncReadExact;
 
     fn into_buffered(self, capacity: usize) -> Self::Target;
 }
 
 #[cfg(all(feature = "futures-io", not(feature = "tokio-io")))]
-impl<R> IntoBufferedAsyncRead for R where R: futures::io::AsyncRead + Send + Sync + Unpin {
+impl<R> IntoBufferedAsyncRead for R
+where
+    R: futures::io::AsyncRead + Send + Sync + Unpin,
+{
     type Target = futures::io::BufReader<R>;
 
     fn into_buffered(self, capacity: usize) -> Self::Target {
@@ -250,7 +252,10 @@ impl<R> IntoBufferedAsyncRead for R where R: futures::io::AsyncRead + Send + Syn
 }
 
 #[cfg(feature = "tokio-io")]
-impl<R> IntoBufferedAsyncRead for R where R: tokio::io::AsyncRead + Send + Sync + Unpin {
+impl<R> IntoBufferedAsyncRead for R
+where
+    R: tokio::io::AsyncRead + Send + Sync + Unpin,
+{
     type Target = tokio::io::BufReader<R>;
 
     fn into_buffered(self, capacity: usize) -> Self::Target {
@@ -266,7 +271,10 @@ pub trait AsyncReadExact: Unpin + Sync + Send {
 
 #[cfg(all(feature = "futures-io", not(feature = "tokio-io")))]
 #[async_trait]
-impl<R> AsyncReadExact for R where R: futures::AsyncReadExt + Unpin + Sync + Send {
+impl<R> AsyncReadExact for R
+where
+    R: futures::AsyncReadExt + Unpin + Sync + Send,
+{
     async fn read_exact(&mut self, to: &mut [u8]) -> Result<(), io::Error> {
         futures::AsyncReadExt::read_exact(self, to).await
     }
@@ -274,7 +282,10 @@ impl<R> AsyncReadExact for R where R: futures::AsyncReadExt + Unpin + Sync + Sen
 
 #[cfg(feature = "tokio-io")]
 #[async_trait]
-impl<R> AsyncReadExact for R where R: tokio::io::AsyncRead + Unpin + Sync + Send {
+impl<R> AsyncReadExact for R
+where
+    R: tokio::io::AsyncRead + Unpin + Sync + Send,
+{
     async fn read_exact(&mut self, to: &mut [u8]) -> Result<(), io::Error> {
         tokio::io::AsyncReadExt::read_exact(self, to).await?;
         Ok(())
@@ -394,7 +405,7 @@ impl<R> CraftReader<R> {
 }
 
 #[cfg(feature = "encryption")]
-fn handle_decryption(cipher: Option<&mut CraftCipher>, buf: &mut[u8]) {
+fn handle_decryption(cipher: Option<&mut CraftCipher>, buf: &mut [u8]) {
     if let Some(encryption) = cipher {
         encryption.decrypt(buf);
     }

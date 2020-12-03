@@ -6,7 +6,7 @@ use std::io::BufReader as StdBufReader;
 use std::net::TcpStream;
 
 #[cfg(any(feature = "futures-io", feature = "tokio-io"))]
-use crate::{CraftAsyncWriter, CraftAsyncReader, IntoBufferedAsyncRead};
+use crate::{CraftAsyncReader, CraftAsyncWriter, IntoBufferedAsyncRead};
 
 pub const BUF_SIZE: usize = 8192;
 
@@ -51,7 +51,7 @@ where
 {
     pub fn from_unbuffered_async<U>(tuple: (U, W), read_direction: PacketDirection) -> Self
     where
-        U: IntoBufferedAsyncRead<Target=R>,
+        U: IntoBufferedAsyncRead<Target = R>,
     {
         Self::from_unbuffered_async_with_state(tuple, read_direction, State::Handshaking)
     }
@@ -62,7 +62,7 @@ where
         state: State,
     ) -> Self
     where
-        U: IntoBufferedAsyncRead<Target=R>,
+        U: IntoBufferedAsyncRead<Target = R>,
     {
         let (ru, writer) = tuple;
         let reader = ru.into_buffered(BUF_SIZE);

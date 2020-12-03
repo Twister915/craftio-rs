@@ -36,7 +36,7 @@ pub enum WriteError {
     #[cfg(feature = "compression")]
     CompressBufError {
         #[cfg(feature = "backtrace")]
-        backtrace: Backtrace
+        backtrace: Backtrace,
     },
     #[error("io error while writing data")]
     IoFail {
@@ -199,7 +199,10 @@ pub trait AsyncWriteAll: Unpin + Send + Sync {
 
 #[cfg(all(feature = "futures-io", not(feature = "tokio-io")))]
 #[async_trait]
-impl<W> AsyncWriteAll for W where W: futures::AsyncWrite + Unpin + Send + Sync {
+impl<W> AsyncWriteAll for W
+where
+    W: futures::AsyncWrite + Unpin + Send + Sync,
+{
     async fn write_all(&mut self, data: &[u8]) -> Result<(), std::io::Error> {
         futures::AsyncWriteExt::write_all(self, data).await?;
         Ok(())
@@ -208,7 +211,10 @@ impl<W> AsyncWriteAll for W where W: futures::AsyncWrite + Unpin + Send + Sync {
 
 #[cfg(feature = "tokio-io")]
 #[async_trait]
-impl<W> AsyncWriteAll for W where W: tokio::io::AsyncWrite + Unpin + Send + Sync {
+impl<W> AsyncWriteAll for W
+where
+    W: tokio::io::AsyncWrite + Unpin + Send + Sync,
+{
     async fn write_all(&mut self, data: &[u8]) -> Result<(), std::io::Error> {
         tokio::io::AsyncWriteExt::write_all(self, data).await?;
         Ok(())
@@ -369,11 +375,7 @@ impl<W> CraftWriter<W> {
     }
 }
 
-fn prepare_packet_normally(
-    buf: &mut [u8],
-    body_size: usize,
-) -> WriteResult<&mut [u8]>
-{
+fn prepare_packet_normally(buf: &mut [u8], body_size: usize) -> WriteResult<&mut [u8]> {
     let packet_len_target = &mut buf[VAR_INT_BUF_SIZE..HEADER_OFFSET];
     let mut packet_len_serializer = SliceSerializer::create(packet_len_target);
     VarInt(body_size as i32)
@@ -398,8 +400,7 @@ fn prepare_packet_compressed<'a>(
     body_size: usize,
 ) -> WriteResult<&'a mut [u8]> {
     let compressed_size = compress(buf, compress_buf, HEADER_OFFSET)?.len();
-    let compress_buf =
-        get_sized_buf(compress_buf, 0, compressed_size + HEADER_OFFSET);
+    let compress_buf = get_sized_buf(compress_buf, 0, compressed_size + HEADER_OFFSET);
 
     let data_len_target = &mut compress_buf[VAR_INT_BUF_SIZE..HEADER_OFFSET];
     let mut data_len_serializer = SliceSerializer::create(data_len_target);
@@ -437,8 +438,7 @@ fn prepare_packet_compressed<'a>(
 fn prepare_packet_compressed_below_threshold(
     buf: &mut [u8],
     body_size: usize,
-) -> WriteResult<&mut [u8]>
-{
+) -> WriteResult<&mut [u8]> {
     let packet_len_start_at = VAR_INT_BUF_SIZE - 1;
     let packet_len_target = &mut buf[packet_len_start_at..HEADER_OFFSET - 1];
     let mut packet_len_serializer = SliceSerializer::create(packet_len_target);

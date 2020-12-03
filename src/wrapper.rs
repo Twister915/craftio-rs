@@ -7,7 +7,6 @@ pub trait CraftWrapper<I> {
 }
 
 pub trait CraftIo {
-
     fn set_state(&mut self, next: State);
 
     #[cfg(feature = "compression")]
