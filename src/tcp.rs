@@ -5,8 +5,8 @@ use mcproto_rs::protocol::{PacketDirection, State};
 use std::io::BufReader as StdBufReader;
 use std::net::TcpStream;
 
-#[cfg(feature = "async")]
-use futures::io::{AsyncRead, AsyncWrite, BufReader as AsyncBufReader};
+#[cfg(any(feature = "futures-io", feature = "tokio-io"))]
+use crate::{CraftAsyncWriter, CraftAsyncReader, IntoBufferedAsyncRead};
 
 pub const BUF_SIZE: usize = 8192;
 
@@ -43,12 +43,32 @@ impl CraftConnection<StdBufReader<TcpStream>, TcpStream> {
     }
 }
 
-#[cfg(feature = "async")]
-impl<R, W> CraftConnection<AsyncBufReader<R>, W>
+#[cfg(any(feature = "futures-io", feature = "tokio-io"))]
+impl<R, W> CraftConnection<R, W>
 where
-    R: AsyncRead + Send + Sync + Unpin,
-    W: AsyncWrite + Send + Sync + Unpin,
+    CraftReader<R>: CraftAsyncReader,
+    CraftWriter<W>: CraftAsyncWriter,
 {
+    pub fn from_unbuffered_async<U>(tuple: (U, W), read_direction: PacketDirection) -> Self
+    where
+        U: IntoBufferedAsyncRead<Target=R>,
+    {
+        Self::from_unbuffered_async_with_state(tuple, read_direction, State::Handshaking)
+    }
+
+    pub fn from_unbuffered_async_with_state<U>(
+        tuple: (U, W),
+        read_direction: PacketDirection,
+        state: State,
+    ) -> Self
+    where
+        U: IntoBufferedAsyncRead<Target=R>,
+    {
+        let (ru, writer) = tuple;
+        let reader = ru.into_buffered(BUF_SIZE);
+        Self::from_async_with_state((reader, writer), read_direction, state)
+    }
+
     pub fn from_async(tuple: (R, W), read_direction: PacketDirection) -> Self {
         Self::from_async_with_state(tuple, read_direction, State::Handshaking)
     }
@@ -59,7 +79,6 @@ where
         state: State,
     ) -> Self {
         let (reader, writer) = tuple;
-        let reader = AsyncBufReader::with_capacity(BUF_SIZE, reader);
         Self {
             reader: CraftReader::wrap_with_state(reader, read_direction, state),
             writer: CraftWriter::wrap_with_state(writer, read_direction.opposite(), state),

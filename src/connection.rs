@@ -1,11 +1,14 @@
 use crate::cfb8::CipherError;
-use crate::reader::{CraftAsyncReader, CraftReader, CraftSyncReader, ReadResult};
+use crate::reader::{CraftReader, CraftSyncReader, ReadResult};
 use crate::wrapper::{CraftIo, CraftWrapper};
-use crate::writer::{CraftAsyncWriter, CraftSyncWriter, CraftWriter, WriteResult};
+use crate::writer::{CraftSyncWriter, CraftWriter, WriteResult};
 use mcproto_rs::protocol::{Packet, RawPacket, State};
 
-#[cfg(feature = "async")]
-use async_trait::async_trait;
+#[cfg(any(feature = "futures-io", feature = "tokio-io"))]
+use {
+    crate::{reader::CraftAsyncReader, writer::CraftAsyncWriter},
+    async_trait::async_trait
+};
 
 pub struct CraftConnection<R, W> {
     pub(crate) reader: CraftReader<R>,
@@ -76,7 +79,7 @@ where
     }
 }
 
-#[cfg(feature = "async")]
+#[cfg(any(feature = "futures-io", feature = "tokio-io"))]
 #[async_trait]
 impl<R, W> CraftAsyncReader for CraftConnection<R, W>
 where
@@ -85,22 +88,22 @@ where
     CraftWriter<W>: CraftAsyncWriter,
     W: Send + Sync,
 {
-    async fn read_packet<'a, P>(&'a mut self) -> ReadResult<<P as RawPacket<'a>>::Packet>
+    async fn read_packet_async<'a, P>(&'a mut self) -> ReadResult<<P as RawPacket<'a>>::Packet>
     where
         P: RawPacket<'a>,
     {
-        self.reader.read_packet::<P>().await
+        self.reader.read_packet_async::<P>().await
     }
 
-    async fn read_raw_packet<'a, P>(&'a mut self) -> ReadResult<P>
+    async fn read_raw_packet_async<'a, P>(&'a mut self) -> ReadResult<P>
     where
         P: RawPacket<'a>,
     {
-        self.reader.read_raw_packet::<P>().await
+        self.reader.read_raw_packet_async::<P>().await
     }
 }
 
-#[cfg(feature = "async")]
+#[cfg(any(feature = "futures-io", feature = "tokio-io"))]
 #[async_trait]
 impl<R, W> CraftAsyncWriter for CraftConnection<R, W>
 where
@@ -109,17 +112,17 @@ where
     CraftWriter<W>: CraftAsyncWriter,
     W: Send + Sync,
 {
-    async fn write_packet<P>(&mut self, packet: P) -> WriteResult<()>
+    async fn write_packet_async<P>(&mut self, packet: P) -> WriteResult<()>
     where
         P: Packet + Send + Sync,
     {
-        self.writer.write_packet(packet).await
+        self.writer.write_packet_async(packet).await
     }
 
-    async fn write_raw_packet<'a, P>(&mut self, packet: P) -> WriteResult<()>
+    async fn write_raw_packet_async<'a, P>(&mut self, packet: P) -> WriteResult<()>
     where
         P: RawPacket<'a> + Send + Sync,
     {
-        self.writer.write_raw_packet(packet).await
+        self.writer.write_raw_packet_async(packet).await
     }
 }

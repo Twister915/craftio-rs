@@ -9,8 +9,8 @@ use std::backtrace::Backtrace;
 use std::io;
 use thiserror::Error;
 
-#[cfg(feature = "async")]
-use {async_trait::async_trait, futures::AsyncReadExt};
+#[cfg(any(feature = "futures-io", feature = "tokio-io"))]
+use async_trait::async_trait;
 
 #[derive(Debug, Error)]
 pub enum ReadError {
@@ -50,17 +50,17 @@ pub enum DecompressErr {
 
 pub type ReadResult<P> = Result<Option<P>, ReadError>;
 
-#[cfg(feature = "async")]
+#[cfg(any(feature = "futures-io", feature = "tokio-io"))]
 #[async_trait]
 pub trait CraftAsyncReader {
-    async fn read_packet<'a, P>(&'a mut self) -> ReadResult<<P as RawPacket<'a>>::Packet>
+    async fn read_packet_async<'a, P>(&'a mut self) -> ReadResult<<P as RawPacket<'a>>::Packet>
     where
         P: RawPacket<'a>,
     {
-        deserialize_raw_packet(self.read_raw_packet::<P>().await)
+        deserialize_raw_packet(self.read_raw_packet_async::<P>().await)
     }
 
-    async fn read_raw_packet<'a, P>(&'a mut self) -> ReadResult<P>
+    async fn read_raw_packet_async<'a, P>(&'a mut self) -> ReadResult<P>
     where
         P: RawPacket<'a>;
 }
@@ -147,13 +147,13 @@ where
     }
 }
 
-#[cfg(feature = "async")]
+#[cfg(any(feature = "futures-io", feature = "tokio-io"))]
 #[async_trait]
 impl<R> CraftAsyncReader for CraftReader<R>
 where
-    R: futures::AsyncRead + Unpin + Sync + Send,
+    R: AsyncReadExact,
 {
-    async fn read_raw_packet<'a, P>(&'a mut self) -> ReadResult<P>
+    async fn read_raw_packet_async<'a, P>(&'a mut self) -> ReadResult<P>
     where
         P: RawPacket<'a>,
     {
@@ -190,10 +190,10 @@ where
     }
 }
 
-#[cfg(feature = "async")]
+#[cfg(any(feature = "futures-io", feature = "tokio-io"))]
 impl<R> CraftReader<R>
 where
-    R: futures::io::AsyncRead + Unpin + Sync + Send,
+    R: AsyncReadExact,
 {
     async fn read_packet_len_async(&mut self) -> ReadResult<VarInt> {
         self.move_ready_data_to_front();
@@ -215,6 +215,55 @@ where
 
         let ready = get_sized_buf(&mut self.raw_buf, self.raw_offset, n);
         Ok(Some(ready))
+    }
+}
+
+#[cfg(any(feature = "futures-io", feature = "tokio-io"))]
+pub trait IntoBufferedAsyncRead {
+
+    type Target: AsyncReadExact;
+
+    fn into_buffered(self, capacity: usize) -> Self::Target;
+}
+
+#[cfg(all(feature = "futures-io", not(feature = "tokio-io")))]
+impl<R> IntoBufferedAsyncRead for R where R: futures::io::AsyncRead + Send + Sync + Unpin {
+    type Target = futures::io::BufReader<R>;
+
+    fn into_buffered(self, capacity: usize) -> Self::Target {
+        futures::io::BufReader::with_capacity(capacity, self)
+    }
+}
+
+#[cfg(feature = "tokio-io")]
+impl<R> IntoBufferedAsyncRead for R where R: tokio::io::AsyncRead + Send + Sync + Unpin {
+    type Target = tokio::io::BufReader<R>;
+
+    fn into_buffered(self, capacity: usize) -> Self::Target {
+        tokio::io::BufReader::with_capacity(capacity, self)
+    }
+}
+
+#[cfg(any(feature = "futures-io", feature = "tokio-io"))]
+#[async_trait]
+pub trait AsyncReadExact: Unpin + Sync + Send {
+    async fn read_exact(&mut self, to: &mut [u8]) -> Result<(), io::Error>;
+}
+
+#[cfg(all(feature = "futures-io", not(feature = "tokio-io")))]
+#[async_trait]
+impl<R> AsyncReadExact for R where R: futures::AsyncReadExt + Unpin + Sync + Send {
+    async fn read_exact(&mut self, to: &mut [u8]) -> Result<(), io::Error> {
+        futures::AsyncReadExt::read_exact(self, to).await
+    }
+}
+
+#[cfg(feature = "tokio-io")]
+#[async_trait]
+impl<R> AsyncReadExact for R where R: tokio::io::AsyncRead + Unpin + Sync + Send {
+    async fn read_exact(&mut self, to: &mut [u8]) -> Result<(), io::Error> {
+        tokio::io::AsyncReadExt::read_exact(self, to).await?;
+        Ok(())
     }
 }
 

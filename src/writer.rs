@@ -9,8 +9,8 @@ use std::backtrace::Backtrace;
 use std::ops::{Deref, DerefMut};
 use thiserror::Error;
 
-#[cfg(feature = "async")]
-use {async_trait::async_trait, futures::AsyncWriteExt};
+#[cfg(any(feature = "futures-io", feature = "tokio-io"))]
+use async_trait::async_trait;
 
 #[derive(Debug, Error)]
 pub enum WriteError {
@@ -90,14 +90,14 @@ impl Into<SerializeErr> for PacketSerializeFail {
 
 pub type WriteResult<P> = Result<P, WriteError>;
 
-#[cfg(feature = "async")]
+#[cfg(any(feature = "futures-io", feature = "tokio-io"))]
 #[async_trait]
 pub trait CraftAsyncWriter {
-    async fn write_packet<P>(&mut self, packet: P) -> WriteResult<()>
+    async fn write_packet_async<P>(&mut self, packet: P) -> WriteResult<()>
     where
         P: Packet + Send + Sync;
 
-    async fn write_raw_packet<'a, P>(&mut self, packet: P) -> WriteResult<()>
+    async fn write_raw_packet_async<'a, P>(&mut self, packet: P) -> WriteResult<()>
     where
         P: RawPacket<'a> + Send + Sync;
 }
@@ -174,13 +174,37 @@ where
     target.write_all(data)
 }
 
-#[cfg(feature = "async")]
+#[cfg(any(feature = "tokio-io", feature = "futures-io"))]
+#[async_trait]
+pub trait AsyncWriteAll: Unpin + Send + Sync {
+    async fn write_all(&mut self, data: &[u8]) -> Result<(), std::io::Error>;
+}
+
+#[cfg(all(feature = "futures-io", not(feature = "tokio-io")))]
+#[async_trait]
+impl<W> AsyncWriteAll for W where W: futures::AsyncWrite + Unpin + Send + Sync {
+    async fn write_all(&mut self, data: &[u8]) -> Result<(), std::io::Error> {
+        futures::AsyncWriteExt::write_all(self, data).await?;
+        Ok(())
+    }
+}
+
+#[cfg(feature = "tokio-io")]
+#[async_trait]
+impl<W> AsyncWriteAll for W where W: tokio::io::AsyncWrite + Unpin + Send + Sync {
+    async fn write_all(&mut self, data: &[u8]) -> Result<(), std::io::Error> {
+        tokio::io::AsyncWriteExt::write_all(self, data).await?;
+        Ok(())
+    }
+}
+
+#[cfg(any(feature = "futures-io", feature = "tokio-io"))]
 #[async_trait]
 impl<W> CraftAsyncWriter for CraftWriter<W>
 where
-    W: futures::AsyncWrite + Unpin + Send + Sync,
+    W: AsyncWriteAll,
 {
-    async fn write_packet<P>(&mut self, packet: P) -> WriteResult<()>
+    async fn write_packet_async<P>(&mut self, packet: P) -> WriteResult<()>
     where
         P: Packet + Send + Sync,
     {
@@ -189,7 +213,7 @@ where
         Ok(())
     }
 
-    async fn write_raw_packet<'a, P>(&mut self, packet: P) -> WriteResult<()>
+    async fn write_raw_packet_async<'a, P>(&mut self, packet: P) -> WriteResult<()>
     where
         P: RawPacket<'a> + Send + Sync,
     {
@@ -199,12 +223,12 @@ where
     }
 }
 
-#[cfg(feature = "async")]
+#[cfg(any(feature = "futures-io", feature = "tokio-io"))]
 async fn write_data_to_target_async<'a, W>(
     tuple: (&'a [u8], &'a mut W),
 ) -> Result<(), std::io::Error>
 where
-    W: futures::AsyncWrite + Unpin + Send + Sync,
+    W: AsyncWriteAll,
 {
     let (data, target) = tuple;
     target.write_all(data).await
