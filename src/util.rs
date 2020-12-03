@@ -15,6 +15,7 @@ pub(crate) fn get_sized_buf(buf: &mut Option<Vec<u8>>, offset: usize, size: usiz
         }
     }
 }
+
 fn ensure_buf_has_size(buf: &mut Vec<u8>, total_size: usize) {
     let cur_len = buf.len();
     if cur_len >= total_size {
