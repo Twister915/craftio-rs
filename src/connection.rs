@@ -1,3 +1,4 @@
+#[cfg(feature = "encryption")]
 use crate::cfb8::CipherError;
 use crate::reader::{CraftReader, CraftSyncReader, ReadResult};
 use crate::wrapper::{CraftIo, CraftWrapper};
@@ -27,11 +28,13 @@ impl<R, W> CraftIo for CraftConnection<R, W> {
         self.writer.set_state(next);
     }
 
+    #[cfg(feature = "compression")]
     fn set_compression_threshold(&mut self, threshold: Option<i32>) {
         self.reader.set_compression_threshold(threshold);
         self.writer.set_compression_threshold(threshold);
     }
 
+    #[cfg(feature = "encryption")]
     fn enable_encryption(&mut self, key: &[u8], iv: &[u8]) -> Result<(), CipherError> {
         self.reader.enable_encryption(key, iv)?;
         self.writer.enable_encryption(key, iv)?;

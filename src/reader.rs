@@ -1,6 +1,8 @@
+#[cfg(feature = "encryption")]
 use crate::cfb8::{setup_craft_cipher, CipherError, CraftCipher};
 use crate::util::{get_sized_buf, VAR_INT_BUF_SIZE};
 use crate::wrapper::{CraftIo, CraftWrapper};
+#[cfg(feature = "compression")]
 use flate2::{DecompressError, FlushDecompress, Status};
 use mcproto_rs::protocol::{Id, PacketDirection, RawPacket, State};
 use mcproto_rs::types::VarInt;
@@ -32,6 +34,7 @@ pub enum ReadError {
         err: mcproto_rs::protocol::PacketErr,
         backtrace: Backtrace,
     },
+    #[cfg(feature = "compression")]
     #[error("failed to decompress packet")]
     DecompressFailed {
         #[from]
@@ -40,6 +43,7 @@ pub enum ReadError {
     },
 }
 
+#[cfg(feature = "compression")]
 #[derive(Debug, Error)]
 pub enum DecompressErr {
     #[error("buf error")]
@@ -83,10 +87,13 @@ pub struct CraftReader<R> {
     raw_buf: Option<Vec<u8>>,
     raw_ready: usize,
     raw_offset: usize,
+    #[cfg(feature = "compression")]
     decompress_buf: Option<Vec<u8>>,
+    #[cfg(feature = "compression")]
     compression_threshold: Option<i32>,
     state: State,
     direction: PacketDirection,
+    #[cfg(feature = "encryption")]
     encryption: Option<CraftCipher>,
 }
 
@@ -101,10 +108,12 @@ impl<R> CraftIo for CraftReader<R> {
         self.state = next;
     }
 
+    #[cfg(feature = "compression")]
     fn set_compression_threshold(&mut self, threshold: Option<i32>) {
         self.compression_threshold = threshold;
     }
 
+    #[cfg(feature = "encryption")]
     fn enable_encryption(&mut self, key: &[u8], iv: &[u8]) -> Result<(), CipherError> {
         setup_craft_cipher(&mut self.encryption, key, iv)
     }
@@ -292,10 +301,13 @@ impl<R> CraftReader<R> {
             raw_buf: None,
             raw_ready: 0,
             raw_offset: 0,
+            #[cfg(feature = "compression")]
             decompress_buf: None,
+            #[cfg(feature = "compression")]
             compression_threshold: None,
             state,
             direction,
+            #[cfg(feature = "encryption")]
             encryption: None,
         }
     }
@@ -314,9 +326,8 @@ impl<R> CraftReader<R> {
         let buf =
             &mut self.raw_buf.as_mut().expect("should exist right now")[offset..offset + size];
         // decrypt the packet if encryption is enabled
-        if let Some(encryption) = self.encryption.as_mut() {
-            encryption.decrypt(buf);
-        }
+        #[cfg(feature = "encryption")]
+        handle_decryption(self.encryption.as_mut(), buf);
 
         // try to get the packet body bytes... this boils down to:
         // * check if compression enabled,
@@ -327,6 +338,7 @@ impl<R> CraftReader<R> {
         //      which contains this packet's data
         // * if compression not enabled, then the buf contains only the packet body bytes
 
+        #[cfg(feature = "compression")]
         let packet_buf = if let Some(_) = self.compression_threshold {
             let (data_len, rest) = dsz_unwrap!(buf, VarInt);
             let data_len = data_len.0 as usize;
@@ -338,6 +350,9 @@ impl<R> CraftReader<R> {
         } else {
             buf
         };
+
+        #[cfg(not(feature = "compression"))]
+        let packet_buf = buf;
 
         let (raw_id, body_buf) = dsz_unwrap!(packet_buf, VarInt);
 
@@ -373,6 +388,13 @@ impl<R> CraftReader<R> {
     }
 }
 
+#[cfg(feature = "encryption")]
+fn handle_decryption(cipher: Option<&mut CraftCipher>, buf: &mut[u8]) {
+    if let Some(encryption) = cipher {
+        encryption.decrypt(buf);
+    }
+}
+
 fn deserialize_raw_packet<'a, P>(raw: ReadResult<P>) -> ReadResult<P::Packet>
 where
     P: RawPacket<'a>,
@@ -394,6 +416,7 @@ fn deserialize_varint(buf: &[u8]) -> ReadResult<(VarInt, usize)> {
     }
 }
 
+#[cfg(feature = "compression")]
 fn decompress<'a>(
     src: &'a [u8],
     target: &'a mut Option<Vec<u8>>,

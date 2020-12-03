@@ -74,9 +74,9 @@ checksum = "0e4cec68f03f32e44924783795810fa50a7035d8c8ebe78580ad7e6c703fba38"
 
 [[package]]
 name = "cc"
-version = "1.0.65"
+version = "1.0.66"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "95752358c8f7552394baf48cd82695b345628ad3f170d607de3ca03b8dacca15"
+checksum = "4c0496836a84f8d0495758516b8621a622beb77c0fed418570e50764093ced48"
 
 [[package]]
 name = "cfg-if"
@@ -335,7 +335,7 @@ dependencies = [
 [[package]]
 name = "mcproto-rs"
 version = "0.2.0"
-source = "git+https://github.com/Twister915/mcproto-rs?branch=master#1f08aada116c9836f3d0f0e6261c47bbeffd7549"
+source = "git+https://github.com/Twister915/mcproto-rs?branch=master#171a93a33c7cc282a1726851eebb69ad4fffe5fc"
 dependencies = [
  "base64",
  "rand",

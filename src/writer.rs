@@ -1,6 +1,8 @@
+#[cfg(feature = "encryption")]
 use crate::cfb8::{setup_craft_cipher, CipherError, CraftCipher};
 use crate::util::{get_sized_buf, move_data_rightwards, VAR_INT_BUF_SIZE};
 use crate::wrapper::{CraftIo, CraftWrapper};
+#[cfg(feature = "compression")]
 use flate2::{CompressError, Compression, FlushCompress, Status};
 use mcproto_rs::protocol::{Id, Packet, PacketDirection, RawPacket, State};
 use mcproto_rs::types::VarInt;
@@ -21,12 +23,14 @@ pub enum WriteError {
         backtrace: Backtrace,
     },
     #[error("failed to compress packet")]
+    #[cfg(feature = "compression")]
     CompressFail {
         #[from]
         err: CompressError,
         backtrace: Backtrace,
     },
     #[error("compression gave buf error")]
+    #[cfg(feature = "compression")]
     CompressBufError { backtrace: Backtrace },
     #[error("io error while writing data")]
     IoFail {
@@ -114,12 +118,14 @@ pub trait CraftSyncWriter {
 
 pub struct CraftWriter<W> {
     inner: W,
-
     raw_buf: Option<Vec<u8>>,
+    #[cfg(feature = "compression")]
     compress_buf: Option<Vec<u8>>,
+    #[cfg(feature = "compression")]
     compression_threshold: Option<i32>,
     state: State,
     direction: PacketDirection,
+    #[cfg(feature = "encryption")]
     encryption: Option<CraftCipher>,
 }
 
@@ -134,10 +140,12 @@ impl<W> CraftIo for CraftWriter<W> {
         self.state = next;
     }
 
+    #[cfg(feature = "compression")]
     fn set_compression_threshold(&mut self, threshold: Option<i32>) {
         self.compression_threshold = threshold;
     }
 
+    #[cfg(feature = "encryption")]
     fn enable_encryption(&mut self, key: &[u8], iv: &[u8]) -> Result<(), CipherError> {
         setup_craft_cipher(&mut self.encryption, key, iv)
     }
@@ -250,10 +258,13 @@ impl<W> CraftWriter<W> {
         Self {
             inner,
             raw_buf: None,
+            #[cfg(feature = "compression")]
             compression_threshold: None,
+            #[cfg(feature = "compression")]
             compress_buf: None,
             state,
             direction,
+            #[cfg(feature = "encryption")]
             encryption: None,
         }
     }
@@ -266,83 +277,22 @@ impl<W> CraftWriter<W> {
         let body_size = prepared.id_size + prepared.data_size;
         let buf = get_sized_buf(&mut self.raw_buf, 0, HEADER_OFFSET + body_size);
 
+        #[cfg(feature = "compression")]
         let packet_data = if let Some(threshold) = self.compression_threshold {
             if threshold >= 0 && (threshold as usize) <= body_size {
-                let compressed_size = compress(buf, &mut self.compress_buf, HEADER_OFFSET)?.len();
-                let compress_buf =
-                    get_sized_buf(&mut self.compress_buf, 0, compressed_size + HEADER_OFFSET);
-
-                let data_len_target = &mut compress_buf[VAR_INT_BUF_SIZE..HEADER_OFFSET];
-                let mut data_len_serializer = SliceSerializer::create(data_len_target);
-                VarInt(body_size as i32)
-                    .mc_serialize(&mut data_len_serializer)
-                    .map_err(move |err| PacketSerializeFail::Header(err))?;
-                let data_len_bytes = data_len_serializer.finish().len();
-
-                let packet_len_target = &mut compress_buf[..VAR_INT_BUF_SIZE];
-                let mut packet_len_serializer = SliceSerializer::create(packet_len_target);
-                VarInt((compressed_size + data_len_bytes) as i32)
-                    .mc_serialize(&mut packet_len_serializer)
-                    .map_err(move |err| PacketSerializeFail::Header(err))?;
-                let packet_len_bytes = packet_len_serializer.finish().len();
-
-                let n_shift_packet_len = VAR_INT_BUF_SIZE - packet_len_bytes;
-                move_data_rightwards(
-                    &mut compress_buf[..HEADER_OFFSET],
-                    packet_len_bytes,
-                    n_shift_packet_len,
-                );
-                let n_shift_data_len = VAR_INT_BUF_SIZE - data_len_bytes;
-                move_data_rightwards(
-                    &mut compress_buf[n_shift_packet_len..HEADER_OFFSET],
-                    packet_len_bytes + data_len_bytes,
-                    n_shift_data_len,
-                );
-                let start_offset = n_shift_data_len + n_shift_packet_len;
-                let end_at = start_offset + data_len_bytes + packet_len_bytes + compressed_size;
-                &mut compress_buf[start_offset..end_at]
+                prepare_packet_compressed(buf, &mut self.compress_buf, body_size)?
             } else {
-                let packet_len_start_at = VAR_INT_BUF_SIZE - 1;
-                let packet_len_target = &mut buf[packet_len_start_at..HEADER_OFFSET - 1];
-                let mut packet_len_serializer = SliceSerializer::create(packet_len_target);
-                VarInt((body_size + 1) as i32)
-                    .mc_serialize(&mut packet_len_serializer)
-                    .map_err(move |err| PacketSerializeFail::Header(err))?;
-
-                let packet_len_bytes = packet_len_serializer.finish().len();
-                let n_shift_packet_len = VAR_INT_BUF_SIZE - packet_len_bytes;
-                move_data_rightwards(
-                    &mut buf[packet_len_start_at..HEADER_OFFSET - 1],
-                    packet_len_bytes,
-                    n_shift_packet_len,
-                );
-
-                let start_offset = packet_len_start_at + n_shift_packet_len;
-                let end_at = start_offset + packet_len_bytes + 1 + body_size;
-                buf[start_offset + packet_len_bytes] = 0; // data_len = 0
-                &mut buf[start_offset..end_at]
+                prepare_packet_compressed_below_threshold(buf, body_size)?
             }
         } else {
-            let packet_len_target = &mut buf[VAR_INT_BUF_SIZE..HEADER_OFFSET];
-            let mut packet_len_serializer = SliceSerializer::create(packet_len_target);
-            VarInt(body_size as i32)
-                .mc_serialize(&mut packet_len_serializer)
-                .map_err(move |err| PacketSerializeFail::Header(err))?;
-            let packet_len_bytes = packet_len_serializer.finish().len();
-            let n_shift_packet_len = VAR_INT_BUF_SIZE - packet_len_bytes;
-            move_data_rightwards(
-                &mut buf[VAR_INT_BUF_SIZE..HEADER_OFFSET],
-                packet_len_bytes,
-                n_shift_packet_len,
-            );
-            let start_offset = VAR_INT_BUF_SIZE + n_shift_packet_len;
-            let end_at = start_offset + packet_len_bytes + body_size;
-            &mut buf[start_offset..end_at]
+            prepare_packet_normally(buf, body_size)?
         };
 
-        if let Some(encryption) = &mut self.encryption {
-            encryption.encrypt(packet_data);
-        }
+        #[cfg(not(feature = "compression"))]
+        let packet_data = prepare_packet_normally(buf, body_size)?;
+
+        #[cfg(feature = "encryption")]
+        handle_encryption(self.encryption.as_mut(), packet_data);
 
         Ok((packet_data, &mut self.inner))
     }
@@ -405,6 +355,104 @@ impl<W> CraftWriter<W> {
         let mut serializer = GrowVecSerializer::create(&mut self.raw_buf, offset);
         f(&mut serializer)?;
         Ok(serializer.finish().map(move |b| b.len()).unwrap_or(0))
+    }
+}
+
+fn prepare_packet_normally(
+    buf: &mut [u8],
+    body_size: usize,
+) -> WriteResult<&mut [u8]>
+{
+    let packet_len_target = &mut buf[VAR_INT_BUF_SIZE..HEADER_OFFSET];
+    let mut packet_len_serializer = SliceSerializer::create(packet_len_target);
+    VarInt(body_size as i32)
+        .mc_serialize(&mut packet_len_serializer)
+        .map_err(move |err| PacketSerializeFail::Header(err))?;
+    let packet_len_bytes = packet_len_serializer.finish().len();
+    let n_shift_packet_len = VAR_INT_BUF_SIZE - packet_len_bytes;
+    move_data_rightwards(
+        &mut buf[VAR_INT_BUF_SIZE..HEADER_OFFSET],
+        packet_len_bytes,
+        n_shift_packet_len,
+    );
+    let start_offset = VAR_INT_BUF_SIZE + n_shift_packet_len;
+    let end_at = start_offset + packet_len_bytes + body_size;
+    Ok(&mut buf[start_offset..end_at])
+}
+
+#[cfg(feature = "compression")]
+fn prepare_packet_compressed<'a>(
+    buf: &'a mut [u8],
+    compress_buf: &'a mut Option<Vec<u8>>,
+    body_size: usize,
+) -> WriteResult<&'a mut [u8]> {
+    let compressed_size = compress(buf, compress_buf, HEADER_OFFSET)?.len();
+    let compress_buf =
+        get_sized_buf(compress_buf, 0, compressed_size + HEADER_OFFSET);
+
+    let data_len_target = &mut compress_buf[VAR_INT_BUF_SIZE..HEADER_OFFSET];
+    let mut data_len_serializer = SliceSerializer::create(data_len_target);
+    VarInt(body_size as i32)
+        .mc_serialize(&mut data_len_serializer)
+        .map_err(move |err| PacketSerializeFail::Header(err))?;
+    let data_len_bytes = data_len_serializer.finish().len();
+
+    let packet_len_target = &mut compress_buf[..VAR_INT_BUF_SIZE];
+    let mut packet_len_serializer = SliceSerializer::create(packet_len_target);
+    VarInt((compressed_size + data_len_bytes) as i32)
+        .mc_serialize(&mut packet_len_serializer)
+        .map_err(move |err| PacketSerializeFail::Header(err))?;
+    let packet_len_bytes = packet_len_serializer.finish().len();
+
+    let n_shift_packet_len = VAR_INT_BUF_SIZE - packet_len_bytes;
+    move_data_rightwards(
+        &mut compress_buf[..HEADER_OFFSET],
+        packet_len_bytes,
+        n_shift_packet_len,
+    );
+    let n_shift_data_len = VAR_INT_BUF_SIZE - data_len_bytes;
+    move_data_rightwards(
+        &mut compress_buf[n_shift_packet_len..HEADER_OFFSET],
+        packet_len_bytes + data_len_bytes,
+        n_shift_data_len,
+    );
+    let start_offset = n_shift_data_len + n_shift_packet_len;
+    let end_at = start_offset + data_len_bytes + packet_len_bytes + compressed_size;
+
+    Ok(&mut compress_buf[start_offset..end_at])
+}
+
+#[cfg(feature = "compression")]
+fn prepare_packet_compressed_below_threshold(
+    buf: &mut [u8],
+    body_size: usize,
+) -> WriteResult<&mut [u8]>
+{
+    let packet_len_start_at = VAR_INT_BUF_SIZE - 1;
+    let packet_len_target = &mut buf[packet_len_start_at..HEADER_OFFSET - 1];
+    let mut packet_len_serializer = SliceSerializer::create(packet_len_target);
+    VarInt((body_size + 1) as i32)
+        .mc_serialize(&mut packet_len_serializer)
+        .map_err(move |err| PacketSerializeFail::Header(err))?;
+
+    let packet_len_bytes = packet_len_serializer.finish().len();
+    let n_shift_packet_len = VAR_INT_BUF_SIZE - packet_len_bytes;
+    move_data_rightwards(
+        &mut buf[packet_len_start_at..HEADER_OFFSET - 1],
+        packet_len_bytes,
+        n_shift_packet_len,
+    );
+
+    let start_offset = packet_len_start_at + n_shift_packet_len;
+    let end_at = start_offset + packet_len_bytes + 1 + body_size;
+    buf[start_offset + packet_len_bytes] = 0; // data_len = 0
+    Ok(&mut buf[start_offset..end_at])
+}
+
+#[cfg(feature = "encryption")]
+fn handle_encryption(encryption: Option<&mut CraftCipher>, buf: &mut [u8]) {
+    if let Some(encryption) = encryption {
+        encryption.encrypt(buf);
     }
 }
 
@@ -474,6 +522,7 @@ impl<'a> SliceSerializer<'a> {
     }
 }
 
+#[cfg(feature = "compression")]
 fn compress<'a, 'b>(
     src: &'b [u8],
     output: &'a mut Option<Vec<u8>>,

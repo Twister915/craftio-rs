@@ -6,9 +6,9 @@ edition = "2018"
 license = "APACHE 2.0"
 
 [dependencies]
-mcproto-rs = { git = "https://github.com/Twister915/mcproto-rs", branch = "master", default-features = false, features = ["std", "v1_15_2", "v1_16_3"] }
-aes = "0.6.0"
-flate2 = { version = "1.0", features = ["zlib"] }
+mcproto-rs = { git = "https://github.com/Twister915/mcproto-rs", branch = "master", features = ["std"], default-features = false }
+aes = { version = "0.6.0", optional = true }
+flate2 = { version = "1.0", features = ["zlib"], optional = true }
 
 thiserror = "1.0"
 
@@ -17,7 +17,9 @@ async-trait = { version = "0.1.42", optional = true }
 tokio = { version = "0.2", features = ["rt-threaded", "tcp", "io-util", "macros", "dns"], optional = true }
 
 [features]
-default = []
+default = [ "compression", "encryption" ]
 
 futures-io = ["futures", "async-trait"]
 tokio-io = ["tokio", "async-trait"]
+encryption = ["aes"]
+compression = [ "flate2" ]
