@@ -1,4 +1,4 @@
-#![feature(backtrace)]
+#![cfg_attr(feature = "backtrace", feature(backtrace))]
 
 #[cfg(feature = "encryption")]
 mod cfb8;

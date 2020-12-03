@@ -7,6 +7,7 @@ use flate2::{CompressError, Compression, FlushCompress, Status};
 use mcproto_rs::protocol::{Id, Packet, PacketDirection, RawPacket, State};
 use mcproto_rs::types::VarInt;
 use mcproto_rs::{Serialize, SerializeErr, SerializeResult, Serializer};
+#[cfg(feature = "backtrace")]
 use std::backtrace::Backtrace;
 use std::ops::{Deref, DerefMut};
 use thiserror::Error;
@@ -20,6 +21,7 @@ pub enum WriteError {
     Serialize {
         #[from]
         err: PacketSerializeFail,
+        #[cfg(feature = "backtrace")]
         backtrace: Backtrace,
     },
     #[error("failed to compress packet")]
@@ -27,27 +29,34 @@ pub enum WriteError {
     CompressFail {
         #[from]
         err: CompressError,
+        #[cfg(feature = "backtrace")]
         backtrace: Backtrace,
     },
     #[error("compression gave buf error")]
     #[cfg(feature = "compression")]
-    CompressBufError { backtrace: Backtrace },
+    CompressBufError {
+        #[cfg(feature = "backtrace")]
+        backtrace: Backtrace
+    },
     #[error("io error while writing data")]
     IoFail {
         #[from]
         err: std::io::Error,
+        #[cfg(feature = "backtrace")]
         backtrace: Backtrace,
     },
     #[error("bad direction")]
     BadDirection {
         attempted: PacketDirection,
         expected: PacketDirection,
+        #[cfg(feature = "backtrace")]
         backtrace: Backtrace,
     },
     #[error("bad state")]
     BadState {
         attempted: State,
         expected: State,
+        #[cfg(feature = "backtrace")]
         backtrace: Backtrace,
     },
 }
@@ -330,6 +339,7 @@ impl<W> CraftWriter<W> {
             return Err(WriteError::BadDirection {
                 expected: self.direction,
                 attempted: id.direction,
+                #[cfg(feature = "backtrace")]
                 backtrace: Backtrace::capture(),
             });
         }
@@ -338,6 +348,7 @@ impl<W> CraftWriter<W> {
             return Err(WriteError::BadState {
                 expected: self.state,
                 attempted: id.state,
+                #[cfg(feature = "backtrace")]
                 backtrace: Backtrace::capture(),
             });
         }
@@ -544,6 +555,7 @@ fn compress<'a, 'b>(
             Status::Ok => {}
             Status::BufError => {
                 return Err(WriteError::CompressBufError {
+                    #[cfg(feature = "backtrace")]
                     backtrace: Backtrace::capture(),
                 })
             }

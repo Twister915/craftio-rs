@@ -3,6 +3,8 @@ use aes::{
     Aes128,
 };
 use thiserror::Error;
+#[cfg(feature = "backtrace")]
+use std::backtrace::Backtrace;
 
 pub type CraftCipherResult<T> = Result<T, CipherError>;
 
@@ -15,9 +17,35 @@ pub enum CipherComponent {
 #[derive(Debug, Error)]
 pub enum CipherError {
     #[error("encryption is already enabled and cannot be enabled again")]
-    AlreadyEnabled,
-    #[error("bad size '{1}' for '{0:?}'")]
-    BadSize(CipherComponent, usize),
+    AlreadyEnabled {
+        #[cfg(feature = "backtrace")]
+        backtrace: Backtrace,
+    },
+    #[error("bad size '{size}' for '{component:?}'")]
+    BadSize {
+        size: usize,
+        component: CipherComponent,
+        #[cfg(feature = "backtrace")]
+        backtrace: Backtrace
+    },
+}
+
+impl CipherError {
+    fn bad_size(component: CipherComponent, size: usize) -> Self {
+        CipherError::BadSize {
+            component,
+            size,
+            #[cfg(feature = "backtrace")]
+            backtrace: Backtrace::capture()
+        }
+    }
+
+    fn already_enabled() -> Self {
+        CipherError::AlreadyEnabled {
+            #[cfg(feature = "backtrace")]
+            backtrace: Backtrace::capture()
+        }
+    }
 }
 
 const BYTES_SIZE: usize = 16;
@@ -31,11 +59,11 @@ pub struct CraftCipher {
 impl CraftCipher {
     pub fn new(key: &[u8], iv: &[u8]) -> CraftCipherResult<Self> {
         if iv.len() != BYTES_SIZE {
-            return Err(CipherError::BadSize(CipherComponent::Iv, iv.len()));
+            return Err(CipherError::bad_size(CipherComponent::Iv, iv.len()));
         }
 
         if key.len() != BYTES_SIZE {
-            return Err(CipherError::BadSize(CipherComponent::Key, iv.len()));
+            return Err(CipherError::bad_size(CipherComponent::Key, key.len()));
         }
 
         let mut iv_out = [0u8; BYTES_SIZE];
@@ -97,7 +125,7 @@ pub(crate) fn setup_craft_cipher(
     iv: &[u8],
 ) -> Result<(), CipherError> {
     if target.is_some() {
-        Err(CipherError::AlreadyEnabled)
+        Err(CipherError::already_enabled())
     } else {
         *target = Some(CraftCipher::new(key, iv)?);
         Ok(())

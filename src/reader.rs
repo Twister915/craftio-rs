@@ -7,6 +7,7 @@ use flate2::{DecompressError, FlushDecompress, Status};
 use mcproto_rs::protocol::{Id, PacketDirection, RawPacket, State};
 use mcproto_rs::types::VarInt;
 use mcproto_rs::{Deserialize, Deserialized};
+#[cfg(feature = "backtrace")]
 use std::backtrace::Backtrace;
 use std::io;
 use thiserror::Error;
@@ -20,18 +21,21 @@ pub enum ReadError {
     IoFailure {
         #[from]
         err: io::Error,
+        #[cfg(feature = "backtrace")]
         backtrace: Backtrace,
     },
     #[error("failed to read header VarInt")]
     PacketHeaderErr {
         #[from]
         err: mcproto_rs::DeserializeErr,
+        #[cfg(feature = "backtrace")]
         backtrace: Backtrace,
     },
     #[error("failed to read packet")]
     PacketErr {
         #[from]
         err: mcproto_rs::protocol::PacketErr,
+        #[cfg(feature = "backtrace")]
         backtrace: Backtrace,
     },
     #[cfg(feature = "compression")]
@@ -39,6 +43,7 @@ pub enum ReadError {
     DecompressFailed {
         #[from]
         err: DecompressErr,
+        #[cfg(feature = "backtrace")]
         backtrace: Backtrace,
     },
 }
