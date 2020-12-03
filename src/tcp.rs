@@ -2,7 +2,6 @@ use crate::connection::CraftConnection;
 use crate::reader::CraftReader;
 use crate::writer::CraftWriter;
 use mcproto_rs::protocol::{PacketDirection, State};
-use std::convert::TryFrom;
 use std::io::BufReader as StdBufReader;
 use std::net::TcpStream;
 

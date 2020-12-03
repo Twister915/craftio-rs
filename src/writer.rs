@@ -183,7 +183,7 @@ impl<W> CraftWriter<W> {
     ) -> WriteResult<(&[u8], &mut W)> {
         // assume id and body are in raw buf from HEADER_OFFSET .. size + HEADER_OFFSET
         let body_size = prepared.id_size + prepared.data_size;
-        let buf = get_sized_buf(&mut self.raw_buf, 0, body_size);
+        let buf = get_sized_buf(&mut self.raw_buf, 0, HEADER_OFFSET + body_size);
 
         let packet_data = if let Some(threshold) = self.compression_threshold {
             if threshold >= 0 && (threshold as usize) <= body_size {
@@ -334,6 +334,7 @@ struct GrowVecSerializer<'a> {
 impl<'a> Serializer for GrowVecSerializer<'a> {
     fn serialize_bytes(&mut self, data: &[u8]) -> SerializeResult {
         get_sized_buf(self.target, self.at + self.offset, data.len()).copy_from_slice(data);
+        self.at += data.len();
         Ok(())
     }
 }

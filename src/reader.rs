@@ -120,9 +120,10 @@ where
     where
         P: RawPacket<'a>,
     {
-        let primary_packet_len = rr_unwrap!(self.read_one_varint_sync()).0 as usize;
-        rr_unwrap!(self.read_n(primary_packet_len));
-        self.read_packet_in_buf::<'a, P>(primary_packet_len)
+        let (primary_packet_len, len_bytes) = rr_unwrap!(self.read_one_varint_sync());
+        let primary_packet_len = primary_packet_len.0 as usize;
+        rr_unwrap!(self.read_n(VAR_INT_BUF_SIZE, primary_packet_len - VAR_INT_BUF_SIZE + len_bytes));
+        self.read_packet_in_buf::<'a, P>(len_bytes, primary_packet_len)
     }
 }
 
@@ -136,9 +137,10 @@ where
     where
         P: RawPacket<'a>,
     {
-        let primary_packet_len = rr_unwrap!(self.read_one_varint_async().await).0 as usize;
-        rr_unwrap!(self.read_n_async(primary_packet_len).await);
-        self.read_packet_in_buf::<P>(primary_packet_len)
+        let (primary_packet_len, len_bytes) = rr_unwrap!(self.read_one_varint_async().await);
+        let primary_packet_len = primary_packet_len.0 as usize;
+        rr_unwrap!(self.read_n_async(VAR_INT_BUF_SIZE, primary_packet_len - VAR_INT_BUF_SIZE + len_bytes).await);
+        self.read_packet_in_buf::<P>(len_bytes, primary_packet_len)
     }
 }
 
@@ -146,12 +148,12 @@ impl<R> CraftReader<R>
 where
     R: std::io::Read,
 {
-    fn read_one_varint_sync(&mut self) -> ReadResult<VarInt> {
-        deserialize_varint(rr_unwrap!(self.read_n(VAR_INT_BUF_SIZE)))
+    fn read_one_varint_sync(&mut self) -> ReadResult<(VarInt, usize)> {
+        deserialize_varint(rr_unwrap!(self.read_n(0, VAR_INT_BUF_SIZE)))
     }
 
-    fn read_n(&mut self, n: usize) -> ReadResult<&mut [u8]> {
-        let buf = get_sized_buf(&mut self.raw_buf, 0, n);
+    fn read_n(&mut self, offset: usize, n: usize) -> ReadResult<&mut [u8]> {
+        let buf = get_sized_buf(&mut self.raw_buf, offset, n);
         check_unexpected_eof!(self.inner.read_exact(buf));
         Ok(Some(buf))
     }
@@ -162,12 +164,12 @@ impl<R> CraftReader<R>
 where
     R: futures::io::AsyncRead + Unpin + Sync + Send,
 {
-    async fn read_one_varint_async(&mut self) -> ReadResult<VarInt> {
-        deserialize_varint(rr_unwrap!(self.read_n_async(VAR_INT_BUF_SIZE).await))
+    async fn read_one_varint_async(&mut self) -> ReadResult<(VarInt, usize)> {
+        deserialize_varint(rr_unwrap!(self.read_n_async(0, VAR_INT_BUF_SIZE).await))
     }
 
-    async fn read_n_async(&mut self, n: usize) -> ReadResult<&mut [u8]> {
-        let buf = get_sized_buf(&mut self.raw_buf, 0, n);
+    async fn read_n_async(&mut self, offset: usize, n: usize) -> ReadResult<&mut [u8]> {
+        let buf = get_sized_buf(&mut self.raw_buf, offset, n);
         check_unexpected_eof!(self.inner.read_exact(buf).await);
         Ok(Some(buf))
     }
@@ -204,12 +206,12 @@ impl<R> CraftReader<R> {
         }
     }
 
-    fn read_packet_in_buf<'a, P>(&'a mut self, size: usize) -> ReadResult<P>
+    fn read_packet_in_buf<'a, P>(&'a mut self, offset: usize, size: usize) -> ReadResult<P>
     where
         P: RawPacket<'a>,
     {
         // find data in buf
-        let buf = &mut self.raw_buf.as_mut().expect("should exist right now")[..size];
+        let buf = &mut self.raw_buf.as_mut().expect("should exist right now")[offset..offset+size];
         // decrypt the packet if encryption is enabled
         if let Some(encryption) = self.encryption.as_mut() {
             encryption.decrypt(buf);
@@ -265,9 +267,9 @@ where
     }
 }
 
-fn deserialize_varint(buf: &[u8]) -> ReadResult<VarInt> {
+fn deserialize_varint(buf: &[u8]) -> ReadResult<(VarInt, usize)> {
     match VarInt::mc_deserialize(buf) {
-        Ok(v) => Ok(Some(v.value)),
+        Ok(v) => Ok(Some((v.value, buf.len() - v.data.len()))),
         Err(err) => Err(ReadError::PacketHeaderErr(err)),
     }
 }
