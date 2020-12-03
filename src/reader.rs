@@ -5,6 +5,8 @@ use flate2::{DecompressError, FlushDecompress, Status};
 use mcproto_rs::protocol::{Id, PacketDirection, RawPacket, State};
 use mcproto_rs::types::VarInt;
 use mcproto_rs::{Deserialize, Deserialized};
+use std::backtrace::Backtrace;
+use std::io;
 use thiserror::Error;
 
 #[cfg(feature = "async")]
@@ -13,13 +15,29 @@ use {async_trait::async_trait, futures::AsyncReadExt};
 #[derive(Debug, Error)]
 pub enum ReadError {
     #[error("i/o failure during read")]
-    IoFailure(#[from] std::io::Error),
+    IoFailure {
+        #[from]
+        err: io::Error,
+        backtrace: Backtrace,
+    },
     #[error("failed to read header VarInt")]
-    PacketHeaderErr(#[from] mcproto_rs::DeserializeErr),
+    PacketHeaderErr {
+        #[from]
+        err: mcproto_rs::DeserializeErr,
+        backtrace: Backtrace,
+    },
     #[error("failed to read packet")]
-    PacketErr(#[from] mcproto_rs::protocol::PacketErr),
+    PacketErr {
+        #[from]
+        err: mcproto_rs::protocol::PacketErr,
+        backtrace: Backtrace,
+    },
     #[error("failed to decompress packet")]
-    DecompressFailed(#[from] DecompressErr),
+    DecompressFailed {
+        #[from]
+        err: DecompressErr,
+        backtrace: Backtrace,
+    },
 }
 
 #[derive(Debug, Error)]
@@ -63,6 +81,8 @@ pub trait CraftSyncReader {
 pub struct CraftReader<R> {
     inner: R,
     raw_buf: Option<Vec<u8>>,
+    raw_ready: usize,
+    raw_offset: usize,
     decompress_buf: Option<Vec<u8>>,
     compression_threshold: Option<i32>,
     state: State,
@@ -107,26 +127,23 @@ macro_rules! check_unexpected_eof {
                 return Ok(None);
             }
 
-            return Err(ReadError::IoFailure(err));
+            return Err(err.into());
         }
     };
 }
 
 impl<R> CraftSyncReader for CraftReader<R>
 where
-    R: std::io::Read,
+    R: io::Read,
 {
     fn read_raw_packet<'a, P>(&'a mut self) -> ReadResult<P>
     where
         P: RawPacket<'a>,
     {
-        let (primary_packet_len, len_bytes) = rr_unwrap!(self.read_one_varint_sync());
-        let primary_packet_len = primary_packet_len.0 as usize;
-        rr_unwrap!(self.read_n(
-            VAR_INT_BUF_SIZE,
-            primary_packet_len - VAR_INT_BUF_SIZE + len_bytes
-        ));
-        self.read_packet_in_buf::<'a, P>(len_bytes, primary_packet_len)
+        self.move_ready_data_to_front();
+        let primary_packet_len = rr_unwrap!(self.read_packet_len_sync()).0 as usize;
+        self.ensure_n_ready_sync(primary_packet_len)?;
+        self.read_packet_in_buf(primary_packet_len)
     }
 }
 
@@ -136,35 +153,40 @@ impl<R> CraftAsyncReader for CraftReader<R>
 where
     R: futures::AsyncRead + Unpin + Sync + Send,
 {
-    async fn read_raw_packet<'a, P>(&'a mut self) -> Result<Option<P>, ReadError>
+    async fn read_raw_packet<'a, P>(&'a mut self) -> ReadResult<P>
     where
         P: RawPacket<'a>,
     {
-        let (primary_packet_len, len_bytes) = rr_unwrap!(self.read_one_varint_async().await);
-        let primary_packet_len = primary_packet_len.0 as usize;
-        rr_unwrap!(
-            self.read_n_async(
-                VAR_INT_BUF_SIZE,
-                primary_packet_len - VAR_INT_BUF_SIZE + len_bytes
-            )
-            .await
-        );
-        self.read_packet_in_buf::<P>(len_bytes, primary_packet_len)
+        self.move_ready_data_to_front();
+        let primary_packet_len = rr_unwrap!(self.read_packet_len_async().await).0 as usize;
+        self.ensure_n_ready_async(primary_packet_len).await?;
+        self.read_packet_in_buf(primary_packet_len)
     }
 }
 
 impl<R> CraftReader<R>
 where
-    R: std::io::Read,
+    R: io::Read,
 {
-    fn read_one_varint_sync(&mut self) -> ReadResult<(VarInt, usize)> {
-        deserialize_varint(rr_unwrap!(self.read_n(0, VAR_INT_BUF_SIZE)))
+    fn read_packet_len_sync(&mut self) -> ReadResult<VarInt> {
+        let buf = rr_unwrap!(self.ensure_n_ready_sync(VAR_INT_BUF_SIZE));
+        let (v, size) = rr_unwrap!(deserialize_varint(buf));
+        self.raw_ready -= size;
+        self.raw_offset += size;
+        Ok(Some(v))
     }
 
-    fn read_n(&mut self, offset: usize, n: usize) -> ReadResult<&mut [u8]> {
-        let buf = get_sized_buf(&mut self.raw_buf, offset, n);
-        check_unexpected_eof!(self.inner.read_exact(buf));
-        Ok(Some(buf))
+    fn ensure_n_ready_sync(&mut self, n: usize) -> ReadResult<&[u8]> {
+        if self.raw_ready < n {
+            let to_read = n - self.raw_ready;
+            let target =
+                get_sized_buf(&mut self.raw_buf, self.raw_offset + self.raw_ready, to_read);
+            check_unexpected_eof!(self.inner.read_exact(target));
+            self.raw_ready = n;
+        }
+
+        let ready = get_sized_buf(&mut self.raw_buf, self.raw_offset, n);
+        Ok(Some(ready))
     }
 }
 
@@ -173,14 +195,26 @@ impl<R> CraftReader<R>
 where
     R: futures::io::AsyncRead + Unpin + Sync + Send,
 {
-    async fn read_one_varint_async(&mut self) -> ReadResult<(VarInt, usize)> {
-        deserialize_varint(rr_unwrap!(self.read_n_async(0, VAR_INT_BUF_SIZE).await))
+    async fn read_packet_len_async(&mut self) -> ReadResult<VarInt> {
+        self.move_ready_data_to_front();
+        let buf = rr_unwrap!(self.ensure_n_ready_async(VAR_INT_BUF_SIZE).await);
+        let (v, size) = rr_unwrap!(deserialize_varint(buf));
+        self.raw_ready -= size;
+        self.raw_offset += size;
+        Ok(Some(v))
     }
 
-    async fn read_n_async(&mut self, offset: usize, n: usize) -> ReadResult<&mut [u8]> {
-        let buf = get_sized_buf(&mut self.raw_buf, offset, n);
-        check_unexpected_eof!(self.inner.read_exact(buf).await);
-        Ok(Some(buf))
+    async fn ensure_n_ready_async(&mut self, n: usize) -> ReadResult<&[u8]> {
+        if self.raw_ready < n {
+            let to_read = n - self.raw_ready;
+            let target =
+                get_sized_buf(&mut self.raw_buf, self.raw_offset + self.raw_ready, to_read);
+            check_unexpected_eof!(self.inner.read_exact(target).await);
+            self.raw_ready = n;
+        }
+
+        let ready = get_sized_buf(&mut self.raw_buf, self.raw_offset, n);
+        Ok(Some(ready))
     }
 }
 
@@ -192,7 +226,7 @@ macro_rules! dsz_unwrap {
                 data: rest,
             }) => (val, rest),
             Err(err) => {
-                return Err(ReadError::PacketHeaderErr(err));
+                return Err(err.into());
             }
         };
     };
@@ -207,6 +241,8 @@ impl<R> CraftReader<R> {
         Self {
             inner,
             raw_buf: None,
+            raw_ready: 0,
+            raw_offset: 0,
             decompress_buf: None,
             compression_threshold: None,
             state,
@@ -215,11 +251,17 @@ impl<R> CraftReader<R> {
         }
     }
 
-    fn read_packet_in_buf<'a, P>(&'a mut self, offset: usize, size: usize) -> ReadResult<P>
+    fn read_packet_in_buf<'a, P>(&'a mut self, size: usize) -> ReadResult<P>
     where
         P: RawPacket<'a>,
     {
         // find data in buf
+        let offset = self.raw_offset;
+        if self.raw_ready < size {
+            panic!("not enough data is ready!");
+        }
+        self.raw_ready -= size;
+        self.raw_offset += size;
         let buf =
             &mut self.raw_buf.as_mut().expect("should exist right now")[offset..offset + size];
         // decrypt the packet if encryption is enabled
@@ -258,8 +300,27 @@ impl<R> CraftReader<R> {
 
         match P::create(id, body_buf) {
             Ok(raw) => Ok(Some(raw)),
-            Err(err) => Err(ReadError::PacketErr(err)),
+            Err(err) => Err(err.into()),
         }
+    }
+
+    fn move_ready_data_to_front(&mut self) {
+        // if there's data that's ready which isn't at the front of the buf, move it to the front
+        if self.raw_ready > 0 && self.raw_offset > 0 {
+            let raw_buf = self
+                .raw_buf
+                .as_mut()
+                .expect("if raw_ready > 0 and raw_offset > 0 then a raw_buf should exist!");
+
+            unsafe {
+                let dest = raw_buf.as_mut_ptr();
+                let src = dest.offset(self.raw_offset as isize);
+                let n_copy = self.raw_ready;
+                std::ptr::copy(src, dest, n_copy);
+            }
+        }
+
+        self.raw_offset = 0;
     }
 }
 
@@ -270,7 +331,7 @@ where
     match raw {
         Ok(Some(raw)) => match raw.deserialize() {
             Ok(deserialized) => Ok(Some(deserialized)),
-            Err(err) => Err(ReadError::PacketErr(err)),
+            Err(err) => Err(err.into()),
         },
         Ok(None) => Ok(None),
         Err(err) => Err(err),
@@ -280,7 +341,7 @@ where
 fn deserialize_varint(buf: &[u8]) -> ReadResult<(VarInt, usize)> {
     match VarInt::mc_deserialize(buf) {
         Ok(v) => Ok(Some((v.value, buf.len() - v.data.len()))),
-        Err(err) => Err(ReadError::PacketHeaderErr(err)),
+        Err(err) => Err(err.into()),
     }
 }
 
@@ -295,12 +356,11 @@ fn decompress<'a>(
         match decompress.decompress(src, decompress_buf, FlushDecompress::Finish) {
             Ok(Status::StreamEnd) => break,
             Ok(Status::Ok) => {}
-            Ok(Status::BufError) => {
-                return Err(ReadError::DecompressFailed(DecompressErr::BufError))
-            }
-            Err(err) => return Err(ReadError::DecompressFailed(DecompressErr::Failure(err))),
+            Ok(Status::BufError) => return Err(DecompressErr::BufError.into()),
+            Err(err) => return Err(DecompressErr::Failure(err).into()),
         }
     }
 
-    Ok(&mut decompress_buf[..(decompress.total_out() as usize)])
+    let decompressed_size = decompress.total_out() as usize;
+    Ok(&mut decompress_buf[..decompressed_size])
 }

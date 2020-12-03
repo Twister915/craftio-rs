@@ -1,3 +1,5 @@
+#![feature(backtrace)]
+
 mod cfb8;
 mod connection;
 mod reader;
@@ -6,9 +8,9 @@ mod util;
 mod wrapper;
 mod writer;
 
+pub use cfb8::CipherError;
 pub use connection::CraftConnection;
 pub use reader::*;
-pub use writer::*;
 pub use tcp::*;
-pub use cfb8::CipherError;
 pub use wrapper::*;
+pub use writer::*;

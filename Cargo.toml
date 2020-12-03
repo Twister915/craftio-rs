@@ -7,11 +7,13 @@ license = "APACHE 2.0"
 
 [dependencies]
 mcproto-rs = { git = "https://github.com/Twister915/mcproto-rs", branch = "master", default-features = false, features = ["std", "v1_15_2", "v1_16_3"] }
+aes = "0.6.0"
+flate2 = { version = "1.0", features = ["zlib"] }
+
+thiserror = "1.0"
+
 futures = { version = "0.3.8", optional = true }
 async-trait = { version = "0.1.42", optional = true }
-aes = "0.6.0"
-thiserror = "1.0"
-flate2 = { version = "1.0", features = ["zlib"] }
 
 [features]
 default = ["async"]

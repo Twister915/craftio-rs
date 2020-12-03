@@ -5,6 +5,8 @@ use flate2::{CompressError, Compression, FlushCompress, Status};
 use mcproto_rs::protocol::{Id, Packet, PacketDirection, RawPacket, State};
 use mcproto_rs::types::VarInt;
 use mcproto_rs::{Serialize, SerializeErr, SerializeResult, Serializer};
+use std::backtrace::Backtrace;
+use std::ops::{Deref, DerefMut};
 use thiserror::Error;
 
 #[cfg(feature = "async")]
@@ -12,23 +14,78 @@ use {async_trait::async_trait, futures::AsyncWriteExt};
 
 #[derive(Debug, Error)]
 pub enum WriteError {
-    #[error("serialization of header data failed")]
-    HeaderSerializeFail(SerializeErr),
-    #[error("packet body serialization failed")]
-    BodySerializeFail(SerializeErr),
+    #[error("packet serialization error")]
+    Serialize {
+        #[from]
+        err: PacketSerializeFail,
+        backtrace: Backtrace,
+    },
     #[error("failed to compress packet")]
-    CompressFail(CompressError),
+    CompressFail {
+        #[from]
+        err: CompressError,
+        backtrace: Backtrace,
+    },
     #[error("compression gave buf error")]
-    CompressBufError,
+    CompressBufError { backtrace: Backtrace },
     #[error("io error while writing data")]
-    IoFail(#[from] std::io::Error),
+    IoFail {
+        #[from]
+        err: std::io::Error,
+        backtrace: Backtrace,
+    },
     #[error("bad direction")]
     BadDirection {
         attempted: PacketDirection,
         expected: PacketDirection,
+        backtrace: Backtrace,
     },
     #[error("bad state")]
-    BadState { attempted: State, expected: State },
+    BadState {
+        attempted: State,
+        expected: State,
+        backtrace: Backtrace,
+    },
+}
+
+#[derive(Debug, Error)]
+pub enum PacketSerializeFail {
+    #[error("failed to serialize packet header")]
+    Header(#[source] SerializeErr),
+    #[error("failed to serialize packet contents")]
+    Body(#[source] SerializeErr),
+}
+
+impl Deref for PacketSerializeFail {
+    type Target = SerializeErr;
+
+    fn deref(&self) -> &Self::Target {
+        use PacketSerializeFail::*;
+        match self {
+            Header(err) => err,
+            Body(err) => err,
+        }
+    }
+}
+
+impl DerefMut for PacketSerializeFail {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        use PacketSerializeFail::*;
+        match self {
+            Header(err) => err,
+            Body(err) => err,
+        }
+    }
+}
+
+impl Into<SerializeErr> for PacketSerializeFail {
+    fn into(self) -> SerializeErr {
+        use PacketSerializeFail::*;
+        match self {
+            Header(err) => err,
+            Body(err) => err,
+        }
+    }
 }
 
 pub type WriteResult<P> = Result<P, WriteError>;
@@ -195,14 +252,14 @@ impl<W> CraftWriter<W> {
                 let mut data_len_serializer = SliceSerializer::create(data_len_target);
                 VarInt(body_size as i32)
                     .mc_serialize(&mut data_len_serializer)
-                    .map_err(move |err| WriteError::HeaderSerializeFail(err))?;
+                    .map_err(move |err| PacketSerializeFail::Header(err))?;
                 let data_len_bytes = data_len_serializer.finish().len();
 
                 let packet_len_target = &mut compress_buf[..VAR_INT_BUF_SIZE];
                 let mut packet_len_serializer = SliceSerializer::create(packet_len_target);
                 VarInt((compressed_size + data_len_bytes) as i32)
                     .mc_serialize(&mut packet_len_serializer)
-                    .map_err(move |err| WriteError::HeaderSerializeFail(err))?;
+                    .map_err(move |err| PacketSerializeFail::Header(err))?;
                 let packet_len_bytes = packet_len_serializer.finish().len();
 
                 let n_shift_packet_len = VAR_INT_BUF_SIZE - packet_len_bytes;
@@ -226,7 +283,7 @@ impl<W> CraftWriter<W> {
                 let mut packet_len_serializer = SliceSerializer::create(packet_len_target);
                 VarInt((body_size + 1) as i32)
                     .mc_serialize(&mut packet_len_serializer)
-                    .map_err(move |err| WriteError::HeaderSerializeFail(err))?;
+                    .map_err(move |err| PacketSerializeFail::Header(err))?;
 
                 let packet_len_bytes = packet_len_serializer.finish().len();
                 let n_shift_packet_len = VAR_INT_BUF_SIZE - packet_len_bytes;
@@ -238,7 +295,7 @@ impl<W> CraftWriter<W> {
 
                 let start_offset = packet_len_start_at + n_shift_packet_len;
                 let end_at = start_offset + packet_len_bytes + 1 + body_size;
-                buf[start_offset+packet_len_bytes] = 0; // data_len = 0
+                buf[start_offset + packet_len_bytes] = 0; // data_len = 0
                 &mut buf[start_offset..end_at]
             }
         } else {
@@ -246,7 +303,7 @@ impl<W> CraftWriter<W> {
             let mut packet_len_serializer = SliceSerializer::create(packet_len_target);
             VarInt(body_size as i32)
                 .mc_serialize(&mut packet_len_serializer)
-                .map_err(move |err| WriteError::HeaderSerializeFail(err))?;
+                .map_err(move |err| PacketSerializeFail::Header(err))?;
             let packet_len_bytes = packet_len_serializer.finish().len();
             let n_shift_packet_len = VAR_INT_BUF_SIZE - packet_len_bytes;
             move_data_rightwards(
@@ -274,7 +331,7 @@ impl<W> CraftWriter<W> {
         let data_size = self.serialize_to_buf(HEADER_OFFSET + id_size, move |serializer| {
             packet
                 .mc_serialize_body(serializer)
-                .map_err(move |err| WriteError::BodySerializeFail(err))
+                .map_err(move |err| PacketSerializeFail::Body(err).into())
         })?;
 
         Ok(PreparedPacketHandle { id_size, data_size })
@@ -299,6 +356,7 @@ impl<W> CraftWriter<W> {
             return Err(WriteError::BadDirection {
                 expected: self.direction,
                 attempted: id.direction,
+                backtrace: Backtrace::capture(),
             });
         }
 
@@ -306,12 +364,13 @@ impl<W> CraftWriter<W> {
             return Err(WriteError::BadState {
                 expected: self.state,
                 attempted: id.state,
+                backtrace: Backtrace::capture(),
             });
         }
 
         self.serialize_to_buf(HEADER_OFFSET, move |serializer| {
             id.mc_serialize(serializer)
-                .map_err(move |err| WriteError::HeaderSerializeFail(err))
+                .map_err(move |err| PacketSerializeFail::Header(err).into())
         })
     }
 
@@ -408,12 +467,13 @@ fn compress<'a, 'b>(
             FlushCompress::None
         };
 
-        match compressor
-            .compress(input, output, flush)
-            .map_err(move |err| WriteError::CompressFail(err))?
-        {
+        match compressor.compress(input, output, flush)? {
             Status::Ok => {}
-            Status::BufError => return Err(WriteError::CompressBufError),
+            Status::BufError => {
+                return Err(WriteError::CompressBufError {
+                    backtrace: Backtrace::capture(),
+                })
+            }
             Status::StreamEnd => break,
         }
     }
