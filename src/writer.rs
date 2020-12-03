@@ -238,6 +238,7 @@ impl<W> CraftWriter<W> {
 
                 let start_offset = packet_len_start_at + n_shift_packet_len;
                 let end_at = start_offset + packet_len_bytes + 1 + body_size;
+                buf[start_offset+packet_len_bytes] = 0; // data_len = 0
                 &mut buf[start_offset..end_at]
             }
         } else {

@@ -122,7 +122,10 @@ where
     {
         let (primary_packet_len, len_bytes) = rr_unwrap!(self.read_one_varint_sync());
         let primary_packet_len = primary_packet_len.0 as usize;
-        rr_unwrap!(self.read_n(VAR_INT_BUF_SIZE, primary_packet_len - VAR_INT_BUF_SIZE + len_bytes));
+        rr_unwrap!(self.read_n(
+            VAR_INT_BUF_SIZE,
+            primary_packet_len - VAR_INT_BUF_SIZE + len_bytes
+        ));
         self.read_packet_in_buf::<'a, P>(len_bytes, primary_packet_len)
     }
 }
@@ -139,7 +142,13 @@ where
     {
         let (primary_packet_len, len_bytes) = rr_unwrap!(self.read_one_varint_async().await);
         let primary_packet_len = primary_packet_len.0 as usize;
-        rr_unwrap!(self.read_n_async(VAR_INT_BUF_SIZE, primary_packet_len - VAR_INT_BUF_SIZE + len_bytes).await);
+        rr_unwrap!(
+            self.read_n_async(
+                VAR_INT_BUF_SIZE,
+                primary_packet_len - VAR_INT_BUF_SIZE + len_bytes
+            )
+            .await
+        );
         self.read_packet_in_buf::<P>(len_bytes, primary_packet_len)
     }
 }
@@ -211,7 +220,8 @@ impl<R> CraftReader<R> {
         P: RawPacket<'a>,
     {
         // find data in buf
-        let buf = &mut self.raw_buf.as_mut().expect("should exist right now")[offset..offset+size];
+        let buf =
+            &mut self.raw_buf.as_mut().expect("should exist right now")[offset..offset + size];
         // decrypt the packet if encryption is enabled
         if let Some(encryption) = self.encryption.as_mut() {
             encryption.decrypt(buf);
