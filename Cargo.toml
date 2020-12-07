@@ -17,7 +17,7 @@ async-trait = { version = "0.1.42", optional = true }
 tokio = { version = "0.2", features = ["rt-threaded", "tcp", "io-util", "macros", "dns"], optional = true }
 
 [features]
-default = [ "compression", "encryption", "gat", "tokio-io" ]
+default = [ "compression", "encryption", "tokio-io" ]
 
 futures-io = ["futures", "async-trait"]
 tokio-io = ["tokio", "async-trait"]
