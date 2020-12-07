@@ -5,6 +5,8 @@ use crate::wrapper::{CraftIo, CraftWrapper};
 #[cfg(feature = "compression")]
 use flate2::{DecompressError, FlushDecompress, Status};
 use mcproto_rs::protocol::{Id, PacketDirection, RawPacket, State};
+#[cfg(feature = "gat")]
+use mcproto_rs::protocol::PacketKind;
 use mcproto_rs::types::VarInt;
 use mcproto_rs::{Deserialize, Deserialized};
 #[cfg(feature = "backtrace")]
@@ -62,6 +64,7 @@ pub type ReadResult<P> = Result<Option<P>, ReadError>;
 #[cfg(any(feature = "futures-io", feature = "tokio-io"))]
 #[async_trait]
 pub trait CraftAsyncReader {
+    #[cfg(not(feature = "gat"))]
     async fn read_packet_async<'a, P>(&'a mut self) -> ReadResult<<P as RawPacket<'a>>::Packet>
     where
         P: RawPacket<'a>,
@@ -69,12 +72,27 @@ pub trait CraftAsyncReader {
         deserialize_raw_packet(self.read_raw_packet_async::<P>().await)
     }
 
+    #[cfg(feature = "gat")]
+    async fn read_packet_async<P>(&mut self) -> ReadResult<<P::RawPacket<'_> as RawPacket<'_>>::Packet>
+    where
+        P: PacketKind
+    {
+        deserialize_raw_packet(self.read_raw_packet_async::<P>().await)
+    }
+
+    #[cfg(not(feature = "gat"))]
     async fn read_raw_packet_async<'a, P>(&'a mut self) -> ReadResult<P>
     where
         P: RawPacket<'a>;
+
+    #[cfg(feature = "gat")]
+    async fn read_raw_packet_async<P>(&mut self) -> ReadResult<P::RawPacket<'_>>
+    where
+        P: PacketKind;
 }
 
 pub trait CraftSyncReader {
+    #[cfg(not(feature = "gat"))]
     fn read_packet<'a, P>(&'a mut self) -> ReadResult<<P as RawPacket<'a>>::Packet>
     where
         P: RawPacket<'a>,
@@ -82,9 +100,23 @@ pub trait CraftSyncReader {
         deserialize_raw_packet(self.read_raw_packet::<'a, P>())
     }
 
+    #[cfg(feature = "gat")]
+    fn read_packet<P>(&mut self) -> ReadResult<<P::RawPacket<'_> as RawPacket>::Packet>
+    where
+        P: PacketKind
+    {
+        deserialize_raw_packet(self.read_raw_packet::<P>())
+    }
+
+    #[cfg(not(feature = "gat"))]
     fn read_raw_packet<'a, P>(&'a mut self) -> ReadResult<P>
     where
         P: RawPacket<'a>;
+
+    #[cfg(feature = "gat")]
+    fn read_raw_packet<'a, P>(&'a mut self) -> ReadResult<P::RawPacket<'a>>
+    where
+        P: PacketKind;
 }
 
 pub struct CraftReader<R> {
@@ -150,14 +182,20 @@ impl<R> CraftSyncReader for CraftReader<R>
 where
     R: io::Read,
 {
+    #[cfg(not(feature = "gat"))]
     fn read_raw_packet<'a, P>(&'a mut self) -> ReadResult<P>
     where
         P: RawPacket<'a>,
     {
-        self.move_ready_data_to_front();
-        let primary_packet_len = rr_unwrap!(self.read_packet_len_sync()).0 as usize;
-        self.ensure_n_ready_sync(primary_packet_len)?;
-        self.read_packet_in_buf(primary_packet_len)
+        self.read_raw_packet_inner::<P>()
+    }
+
+    #[cfg(feature = "gat")]
+    fn read_raw_packet<'a, P>(&'a mut self) -> ReadResult<P::RawPacket<'a>>
+    where
+        P: PacketKind
+    {
+        self.read_raw_packet_inner::<P::RawPacket<'a>>()
     }
 }
 
@@ -167,14 +205,20 @@ impl<R> CraftAsyncReader for CraftReader<R>
 where
     R: AsyncReadExact,
 {
+    #[cfg(not(feature = "gat"))]
     async fn read_raw_packet_async<'a, P>(&'a mut self) -> ReadResult<P>
     where
         P: RawPacket<'a>,
     {
-        self.move_ready_data_to_front();
-        let primary_packet_len = rr_unwrap!(self.read_packet_len_async().await).0 as usize;
-        self.ensure_n_ready_async(primary_packet_len).await?;
-        self.read_packet_in_buf(primary_packet_len)
+        self.read_raw_packet_inner_async().await
+    }
+
+    #[cfg(feature = "gat")]
+    async fn read_raw_packet_async<P>(&mut self) -> ReadResult<P::RawPacket<'_>>
+    where
+        P: PacketKind,
+    {
+        self.read_raw_packet_inner_async::<P::RawPacket<'_>>().await
     }
 }
 
@@ -182,6 +226,16 @@ impl<R> CraftReader<R>
 where
     R: io::Read,
 {
+    fn read_raw_packet_inner<'a, P>(&'a mut self) -> ReadResult<P>
+    where
+        P: RawPacket<'a>
+    {
+        self.move_ready_data_to_front();
+        let primary_packet_len = rr_unwrap!(self.read_packet_len_sync()).0 as usize;
+        self.ensure_n_ready_sync(primary_packet_len)?;
+        self.read_packet_in_buf(primary_packet_len)
+    }
+
     fn read_packet_len_sync(&mut self) -> ReadResult<VarInt> {
         let buf = rr_unwrap!(self.ensure_n_ready_sync(VAR_INT_BUF_SIZE));
         let (v, size) = rr_unwrap!(deserialize_varint(buf));
@@ -209,6 +263,16 @@ impl<R> CraftReader<R>
 where
     R: AsyncReadExact,
 {
+    async fn read_raw_packet_inner_async<'a, P>(&'a mut self) -> ReadResult<P>
+    where
+        P: RawPacket<'a>
+    {
+        self.move_ready_data_to_front();
+        let primary_packet_len = rr_unwrap!(self.read_packet_len_async().await).0 as usize;
+        self.ensure_n_ready_async(primary_packet_len).await?;
+        self.read_packet_in_buf(primary_packet_len)
+    }
+
     async fn read_packet_len_async(&mut self) -> ReadResult<VarInt> {
         self.move_ready_data_to_front();
         let buf = rr_unwrap!(self.ensure_n_ready_async(VAR_INT_BUF_SIZE).await);

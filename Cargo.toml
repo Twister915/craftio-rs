@@ -17,10 +17,11 @@ async-trait = { version = "0.1.42", optional = true }
 tokio = { version = "0.2", features = ["rt-threaded", "tcp", "io-util", "macros", "dns"], optional = true }
 
 [features]
-default = [ "compression", "encryption" ]
+default = [ "compression", "encryption", "gat", "tokio-io" ]
 
 futures-io = ["futures", "async-trait"]
 tokio-io = ["tokio", "async-trait"]
 encryption = ["aes"]
 compression = [ "flate2" ]
 backtrace = []
+gat = ["mcproto-rs/gat"]

@@ -4,7 +4,8 @@ use crate::reader::{CraftReader, CraftSyncReader, ReadResult};
 use crate::wrapper::{CraftIo, CraftWrapper};
 use crate::writer::{CraftSyncWriter, CraftWriter, WriteResult};
 use mcproto_rs::protocol::{Packet, RawPacket, State};
-
+#[cfg(feature = "gat")]
+use mcproto_rs::protocol::PacketKind;
 #[cfg(any(feature = "futures-io", feature = "tokio-io"))]
 use {
     crate::{reader::CraftAsyncReader, writer::CraftAsyncWriter},
@@ -16,9 +17,9 @@ pub struct CraftConnection<R, W> {
     pub(crate) writer: CraftWriter<W>,
 }
 
-impl<R, W> CraftWrapper<(CraftReader<R>, CraftWriter<W>)> for CraftConnection<R, W> {
-    fn into_inner(self) -> (CraftReader<R>, CraftWriter<W>) {
-        (self.reader, self.writer)
+impl<R, W> CraftWrapper<(R, W)> for CraftConnection<R, W> {
+    fn into_inner(self) -> (R, W) {
+        (self.reader.into_inner(), self.writer.into_inner())
     }
 }
 
@@ -47,6 +48,7 @@ where
     CraftReader<R>: CraftSyncReader,
     CraftWriter<W>: CraftSyncWriter,
 {
+    #[cfg(not(feature = "gat"))]
     fn read_packet<'a, P>(&'a mut self) -> ReadResult<<P as RawPacket<'a>>::Packet>
     where
         P: RawPacket<'a>,
@@ -54,9 +56,26 @@ where
         self.reader.read_packet::<P>()
     }
 
+    #[cfg(feature = "gat")]
+    fn read_packet<P>(&mut self) -> ReadResult<<P::RawPacket<'_> as RawPacket>::Packet>
+    where
+        P: PacketKind
+    {
+        self.reader.read_packet::<P>()
+    }
+
+    #[cfg(not(feature = "gat"))]
     fn read_raw_packet<'a, P>(&'a mut self) -> ReadResult<P>
     where
         P: RawPacket<'a>,
+    {
+        self.reader.read_raw_packet::<P>()
+    }
+
+    #[cfg(feature = "gat")]
+    fn read_raw_packet<P>(&mut self) -> ReadResult<P::RawPacket<'_>>
+    where
+        P: PacketKind
     {
         self.reader.read_raw_packet::<P>()
     }
@@ -91,6 +110,7 @@ where
     CraftWriter<W>: CraftAsyncWriter,
     W: Send + Sync,
 {
+    #[cfg(not(feature = "gat"))]
     async fn read_packet_async<'a, P>(&'a mut self) -> ReadResult<<P as RawPacket<'a>>::Packet>
     where
         P: RawPacket<'a>,
@@ -98,9 +118,26 @@ where
         self.reader.read_packet_async::<P>().await
     }
 
+    #[cfg(feature = "gat")]
+    async fn read_packet_async<P>(&mut self) -> ReadResult<<P::RawPacket<'_> as RawPacket<'_>>::Packet>
+    where
+        P: PacketKind
+    {
+        self.reader.read_packet_async::<P>().await
+    }
+
+    #[cfg(not(feature = "gat"))]
     async fn read_raw_packet_async<'a, P>(&'a mut self) -> ReadResult<P>
     where
         P: RawPacket<'a>,
+    {
+        self.reader.read_raw_packet_async::<P>().await
+    }
+
+    #[cfg(feature = "gat")]
+    async fn read_raw_packet_async<P>(&mut self) -> ReadResult<P::RawPacket<'_>>
+    where
+        P: PacketKind
     {
         self.reader.read_raw_packet_async::<P>().await
     }
@@ -127,5 +164,15 @@ where
         P: RawPacket<'a> + Send + Sync,
     {
         self.writer.write_raw_packet_async(packet).await
+    }
+}
+
+impl<R, W> CraftConnection<R, W> {
+    pub fn into_split(self) -> (CraftReader<R>, CraftWriter<W>) {
+        (self.reader, self.writer)
+    }
+
+    pub fn split(&mut self) -> (&mut CraftReader<R>, &mut CraftWriter<W>) {
+        (&mut self.reader, &mut self.writer)
     }
 }
