@@ -1,4 +1,5 @@
 #![cfg_attr(feature = "backtrace", feature(backtrace))]
+#![cfg_attr(feature = "gat", feature(generic_associated_types))]
 
 #[cfg(feature = "encryption")]
 mod cfb8;
