@@ -57,7 +57,7 @@ where
     }
 
     #[cfg(feature = "gat")]
-    fn read_packet<P>(&mut self) -> ReadResult<<P::RawPacket<'_>>::Packet>
+    fn read_packet<P>(&mut self) -> ReadResult<<P::RawPacket<'_> as RawPacket>::Packet>
     where
         P: PacketKind
     {
