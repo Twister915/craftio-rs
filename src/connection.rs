@@ -119,7 +119,7 @@ where
     }
 
     #[cfg(feature = "gat")]
-    async fn read_packet_async<P>(&mut self) -> ReadResult<<P::RawPacket<'_>>::Packet>
+    async fn read_packet_async<P>(&mut self) -> ReadResult<<P::RawPacket<'_> as RawPacket<'_>>::Packet>
     where
         P: PacketKind
     {
