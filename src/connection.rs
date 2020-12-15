@@ -3,7 +3,7 @@ use crate::cfb8::CipherError;
 use crate::reader::{CraftReader, CraftSyncReader, ReadResult};
 use crate::wrapper::{CraftIo, CraftWrapper};
 use crate::writer::{CraftSyncWriter, CraftWriter, WriteResult};
-use mcproto_rs::protocol::{Packet, RawPacket, State};
+use mcproto_rs::protocol::{Packet, RawPacket, State, Id};
 #[cfg(feature = "gat")]
 use mcproto_rs::protocol::PacketKind;
 #[cfg(any(feature = "futures-io", feature = "tokio-io"))]
@@ -79,6 +79,10 @@ where
     {
         self.reader.read_raw_packet::<P>()
     }
+
+    fn read_raw_untyped_packet(&mut self) -> ReadResult<(Id, &[u8])> {
+        self.reader.read_raw_untyped_packet()
+    }
 }
 
 impl<R, W> CraftSyncWriter for CraftConnection<R, W>
@@ -140,6 +144,10 @@ where
         P: PacketKind
     {
         self.reader.read_raw_packet_async::<P>().await
+    }
+
+    async fn read_raw_untyped_packet_async(&mut self) -> ReadResult<(Id, &[u8])> {
+        self.reader.read_raw_untyped_packet_async().await
     }
 }
 

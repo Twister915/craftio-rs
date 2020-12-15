@@ -88,6 +88,8 @@ pub trait CraftAsyncReader {
     async fn read_raw_packet_async<P>(&mut self) -> ReadResult<P::RawPacket<'_>>
     where
         P: PacketKind;
+
+    async fn read_raw_untyped_packet_async(&mut self) -> ReadResult<(Id, &[u8])>;
 }
 
 pub trait CraftSyncReader {
@@ -116,6 +118,8 @@ pub trait CraftSyncReader {
     fn read_raw_packet<P>(&mut self) -> ReadResult<P::RawPacket<'_>>
     where
         P: PacketKind;
+
+    fn read_raw_untyped_packet(&mut self) -> ReadResult<(Id, &[u8])>;
 }
 
 pub struct CraftReader<R> {
@@ -196,6 +200,10 @@ where
     {
         self.read_raw_packet_inner::<P::RawPacket<'_>>()
     }
+
+    fn read_raw_untyped_packet(&mut self) -> ReadResult<(Id, &[u8])> {
+        self.read_untyped_packet_inner()
+    }
 }
 
 #[cfg(any(feature = "futures-io", feature = "tokio-io"))]
@@ -219,20 +227,40 @@ where
     {
         self.read_raw_packet_inner_async::<P::RawPacket<'_>>().await
     }
+
+    async fn read_raw_untyped_packet_async(&mut self) -> ReadResult<(Id, &[u8])> {
+        self.read_raw_untyped_packet_inner_async().await
+    }
 }
 
 impl<R> CraftReader<R>
 where
     R: io::Read,
 {
+    fn read_untyped_packet_inner(&mut self) -> ReadResult<(Id, &[u8])> {
+        if let Some(primary_packet_len) = self.read_raw_inner()? {
+            self.read_untyped_packet_in_buf(primary_packet_len)
+        } else {
+            Ok(None)
+        }
+    }
+
     fn read_raw_packet_inner<'a, P>(&'a mut self) -> ReadResult<P>
     where
         P: RawPacket<'a>
     {
+        if let Some(primary_packet_len) = self.read_raw_inner()? {
+            self.read_packet_in_buf(primary_packet_len)
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn read_raw_inner(&mut self) -> ReadResult<usize> {
         self.move_ready_data_to_front();
         let primary_packet_len = rr_unwrap!(self.read_packet_len_sync()).0 as usize;
         self.ensure_n_ready_sync(primary_packet_len)?;
-        self.read_packet_in_buf(primary_packet_len)
+        Ok(Some(primary_packet_len))
     }
 
     fn read_packet_len_sync(&mut self) -> ReadResult<VarInt> {
@@ -266,10 +294,26 @@ where
     where
         P: RawPacket<'a>
     {
+        if let Some(primary_packet_len) = self.read_raw_inner_async().await? {
+            self.read_packet_in_buf(primary_packet_len)
+        } else {
+            Ok(None)
+        }
+    }
+
+    async fn read_raw_untyped_packet_inner_async(&mut self) -> ReadResult<(Id, &[u8])> {
+        if let Some(primary_packet_len) = self.read_raw_inner_async().await? {
+            self.read_untyped_packet_in_buf(primary_packet_len)
+        } else {
+            Ok(None)
+        }
+    }
+
+    async fn read_raw_inner_async(&mut self) -> ReadResult<usize> {
         self.move_ready_data_to_front();
         let primary_packet_len = rr_unwrap!(self.read_packet_len_async().await).0 as usize;
         self.ensure_n_ready_async(primary_packet_len).await?;
-        self.read_packet_in_buf(primary_packet_len)
+        Ok(Some(primary_packet_len))
     }
 
     async fn read_packet_len_async(&mut self) -> ReadResult<VarInt> {
@@ -391,9 +435,7 @@ impl<R> CraftReader<R> {
         }
     }
 
-    fn read_packet_in_buf<'a, P>(&'a mut self, size: usize) -> ReadResult<P>
-    where
-        P: RawPacket<'a>,
+    fn read_untyped_packet_in_buf(&mut self, size: usize) -> ReadResult<(Id, &[u8])>
     {
         // find data in buf
         let offset = self.raw_offset;
@@ -434,16 +476,26 @@ impl<R> CraftReader<R> {
         let packet_buf = buf;
 
         let (raw_id, body_buf) = dsz_unwrap!(packet_buf, VarInt);
-
         let id = Id {
             id: raw_id.0,
             state: self.state.clone(),
-            direction: self.direction.clone(),
+            direction: self.direction.clone()
         };
 
-        match P::create(id, body_buf) {
-            Ok(raw) => Ok(Some(raw)),
-            Err(err) => Err(err.into()),
+        Ok(Some((id, body_buf)))
+    }
+
+    fn read_packet_in_buf<'a, P>(&'a mut self, size: usize) -> ReadResult<P>
+    where
+        P: RawPacket<'a>,
+    {
+        if let Some((id, body_buf)) = self.read_untyped_packet_in_buf(size)? {
+            match P::create(id, body_buf) {
+                Ok(raw) => Ok(Some(raw)),
+                Err(err) => Err(err.into()),
+            }
+        } else {
+            None
         }
     }
 
