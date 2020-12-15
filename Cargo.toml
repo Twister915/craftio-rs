@@ -14,7 +14,7 @@ thiserror = "1.0"
 
 futures = { version = "0.3.8", optional = true }
 async-trait = { version = "0.1.42", optional = true }
-tokio = { version = "0.2", features = ["rt-threaded", "tcp", "io-util", "macros", "dns"], optional = true }
+tokio = { version = "0.3", features = ["net", "io-util"], optional = true }
 
 [features]
 default = [ "compression", "encryption", "tokio-io" ]
