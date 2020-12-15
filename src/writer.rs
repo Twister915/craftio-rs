@@ -11,7 +11,6 @@ use mcproto_rs::{Serialize, SerializeErr, SerializeResult, Serializer};
 use std::backtrace::Backtrace;
 use std::ops::{Deref, DerefMut};
 use thiserror::Error;
-
 #[cfg(any(feature = "futures-io", feature = "tokio-io"))]
 use async_trait::async_trait;
 
@@ -103,28 +102,73 @@ impl Into<SerializeErr> for PacketSerializeFail {
 
 pub type WriteResult<P> = Result<P, WriteError>;
 
+///
+/// This trait is the interface by which you can write packets to some underlying `AsyncWrite` stream
+///
+/// If you construct a `CraftWriter` by wrapping an `AsyncWrite` then `CraftWriter` will implement
+/// this trait.
+///
 #[cfg(any(feature = "futures-io", feature = "tokio-io"))]
 #[async_trait]
 pub trait CraftAsyncWriter {
+    ///
+    /// Attempts to serialize, and then write a packet struct to the wrapped stream.
+    ///
     async fn write_packet_async<P>(&mut self, packet: P) -> WriteResult<()>
     where
         P: Packet + Send + Sync;
 
+    ///
+    /// Attempts to write a serialized packet to the wrapped stream.
+    ///
+    /// This function is most useful when forwarding packets from a reader. You can read raw
+    /// packets from the reader, then match on the enum variant to conditionally deserialize only
+    /// certain packet types to implement behavior, and leave other packets that are irrelevant to
+    /// your application in their raw form.
+    ///
     async fn write_raw_packet_async<'a, P>(&mut self, packet: P) -> WriteResult<()>
     where
         P: RawPacket<'a> + Send + Sync;
 }
 
+///
+/// This trait is the interface by which you can write packets to some underlying implementor of
+/// `std::io::Write`.
+///
+/// If you construct a `CraftWriter` by wrapping a `std::io::Write` implementor then `CraftWriter`
+/// will implement this trait.
+///
 pub trait CraftSyncWriter {
+    ///
+    /// Attempts to serialize, and then write a packet struct to the wrapped stream.
+    ///
     fn write_packet<P>(&mut self, packet: P) -> WriteResult<()>
     where
         P: Packet;
 
+    ///
+    /// Attempts to write a serialized packet to the wrapped stream
+    ///
+    /// This function is most useful when forwarding packets from a reader. You can read raw
+    /// packets from the reader, then match on the enum variant to conditionally deserialize only
+    /// certain packet types to implement behavior, and leave other packets that are irrelevant to
+    /// your application in their raw form.
+    ///
     fn write_raw_packet<'a, P>(&mut self, packet: P) -> WriteResult<()>
     where
         P: RawPacket<'a>;
 }
 
+///
+/// Wraps some stream of type `W`, and implements either `CraftSyncWriter` or `CraftAsyncWriter` (or both)
+/// based on what types `W` implements.
+///
+/// You can construct this type calling the function `wrap_with_state`, which requires you to specify
+/// a packet direction (are written packets server-bound or client-bound?) and a state
+/// (`handshaking`? `login`? `status`? `play`?).
+///
+/// This type holds some internal buffers but only allocates them when they are required.
+///
 pub struct CraftWriter<W> {
     inner: W,
     raw_buf: Option<Vec<u8>>,
@@ -257,7 +301,52 @@ where
     target.write_all(data).await
 }
 
-const HEADER_OFFSET: usize = VAR_INT_BUF_SIZE * 2;
+// this HEADER_OFFSET is basically the number of free 0s at the front of the packet buffer when
+// we setup serialization of a packet. The purpose of doing this is to serialize packet id + body
+// first, then serialize the length in front of it. The length, which is a VarInt, can be up to 5
+// bytes long.
+//
+// Therefore, the general algorithm for serializing a packet is:
+//  * use a Vec<u8> as a buffer
+//  * use GrowVecSerializer to serialize packet id + body into buffer starting at offset HEADER_OFFSET
+//
+//  If we are in compressed mode, then we must write two lengths:
+//    * packet length (literal length, as in number of bytes that follows)
+//    * data length (length of the id + body when uncompressed)
+//
+//  In a compressed mode, we only perform compression when the length >= threshold, and if it's below
+//  the threshold we write these two VarInts at the front of the packet:
+//    * packet length (literal # of bytes to follow)
+//    * 0 - the data length
+//
+//  No matter what mode we are in, we first write packet id + packet body to a buffer called "buf"
+//
+//  If we are not in a compressed mode, then we simply put the packet length at the front of this
+//  buf and return a pointer to the region which contains the length + id + data.
+//
+//  In compressed mode, we lazily allocate a second buffer called "compress_buf" which will only be
+//  used if we actually compress a packet.
+//
+//  "buf" reserves enough space for a length varint and 1 extra byte for a 0 data length
+//
+//  If we are in compressed mode, but not actually performing compression, we use the packet data
+//  already in buf, and simply put the length of the packet (+ 1) into the region starting at 0
+//
+//  If we are in compressed mode, and we perform compression on the packet, we will compress data
+//  in buf from HEADER_OFFSET..packet_id_and_body_len into compress_buf region at COMPRESS_HEADER_OFFSET..
+//  We can then put the packet length and data length in the region 0..COMPRESS_HEADER_OFFSET
+//
+// Once the packet is prepared in a buffer, if encryption is enabled we simply encrypt that entire
+// block of data, and then we write that region of data to the target pipe
+//
+#[cfg(feature = "compression")]
+const HEADER_OFFSET: usize = VAR_INT_BUF_SIZE + 1;
+
+#[cfg(not(feature = "compression"))]
+const HEADER_OFFSET: usize = VAR_INT_BUF_SIZE;
+
+#[cfg(feature = "compression")]
+const COMPRESSED_HEADER_OFFSET: usize = VAR_INT_BUF_SIZE * 2;
 
 struct PreparedPacketHandle {
     id_size: usize,
@@ -295,7 +384,8 @@ impl<W> CraftWriter<W> {
         #[cfg(feature = "compression")]
         let packet_data = if let Some(threshold) = self.compression_threshold {
             if threshold >= 0 && (threshold as usize) <= body_size {
-                prepare_packet_compressed(buf, &mut self.compress_buf, body_size)?
+                let body_data = &buf[HEADER_OFFSET..];
+                prepare_packet_compressed(body_data, &mut self.compress_buf)?
             } else {
                 prepare_packet_compressed_below_threshold(buf, body_size)?
             }
@@ -376,35 +466,42 @@ impl<W> CraftWriter<W> {
 }
 
 fn prepare_packet_normally(buf: &mut [u8], body_size: usize) -> WriteResult<&mut [u8]> {
-    let packet_len_target = &mut buf[VAR_INT_BUF_SIZE..HEADER_OFFSET];
+    #[cfg(feature = "compression")]
+    const BUF_SKIP_BYTES: usize = 1;
+
+    #[cfg(not(feature = "compression"))]
+    const BUF_SKIP_BYTES: usize = 0;
+
+    let packet_len_target = &mut buf[BUF_SKIP_BYTES..HEADER_OFFSET];
     let mut packet_len_serializer = SliceSerializer::create(packet_len_target);
     VarInt(body_size as i32)
         .mc_serialize(&mut packet_len_serializer)
         .map_err(move |err| PacketSerializeFail::Header(err))?;
     let packet_len_bytes = packet_len_serializer.finish().len();
+
     let n_shift_packet_len = VAR_INT_BUF_SIZE - packet_len_bytes;
     move_data_rightwards(
-        &mut buf[VAR_INT_BUF_SIZE..HEADER_OFFSET],
+        &mut buf[BUF_SKIP_BYTES..HEADER_OFFSET],
         packet_len_bytes,
         n_shift_packet_len,
     );
-    let start_offset = VAR_INT_BUF_SIZE + n_shift_packet_len;
+
+    let start_offset = n_shift_packet_len + BUF_SKIP_BYTES;
     let end_at = start_offset + packet_len_bytes + body_size;
     Ok(&mut buf[start_offset..end_at])
 }
 
 #[cfg(feature = "compression")]
 fn prepare_packet_compressed<'a>(
-    buf: &'a mut [u8],
+    buf: &'a [u8],
     compress_buf: &'a mut Option<Vec<u8>>,
-    body_size: usize,
 ) -> WriteResult<&'a mut [u8]> {
-    let compressed_size = compress(buf, compress_buf, HEADER_OFFSET)?.len();
-    let compress_buf = get_sized_buf(compress_buf, 0, compressed_size + HEADER_OFFSET);
+    let compressed_size = compress(buf, compress_buf, COMPRESSED_HEADER_OFFSET)?.len();
+    let compress_buf = get_sized_buf(compress_buf, 0, compressed_size + COMPRESSED_HEADER_OFFSET);
 
-    let data_len_target = &mut compress_buf[VAR_INT_BUF_SIZE..HEADER_OFFSET];
+    let data_len_target = &mut compress_buf[VAR_INT_BUF_SIZE..COMPRESSED_HEADER_OFFSET];
     let mut data_len_serializer = SliceSerializer::create(data_len_target);
-    VarInt(body_size as i32)
+    VarInt(buf.len() as i32)
         .mc_serialize(&mut data_len_serializer)
         .map_err(move |err| PacketSerializeFail::Header(err))?;
     let data_len_bytes = data_len_serializer.finish().len();
@@ -418,13 +515,13 @@ fn prepare_packet_compressed<'a>(
 
     let n_shift_packet_len = VAR_INT_BUF_SIZE - packet_len_bytes;
     move_data_rightwards(
-        &mut compress_buf[..HEADER_OFFSET],
+        &mut compress_buf[..COMPRESSED_HEADER_OFFSET],
         packet_len_bytes,
         n_shift_packet_len,
     );
     let n_shift_data_len = VAR_INT_BUF_SIZE - data_len_bytes;
     move_data_rightwards(
-        &mut compress_buf[n_shift_packet_len..HEADER_OFFSET],
+        &mut compress_buf[n_shift_packet_len..COMPRESSED_HEADER_OFFSET],
         packet_len_bytes + data_len_bytes,
         n_shift_data_len,
     );
@@ -439,25 +536,23 @@ fn prepare_packet_compressed_below_threshold(
     buf: &mut [u8],
     body_size: usize,
 ) -> WriteResult<&mut [u8]> {
-    let packet_len_start_at = VAR_INT_BUF_SIZE - 1;
-    let packet_len_target = &mut buf[packet_len_start_at..HEADER_OFFSET - 1];
+    let packet_len_target = &mut buf[..HEADER_OFFSET - 1];
     let mut packet_len_serializer = SliceSerializer::create(packet_len_target);
-    VarInt((body_size + 1) as i32)
+    VarInt((body_size + 1) as i32) // +1 because of data length
         .mc_serialize(&mut packet_len_serializer)
         .map_err(move |err| PacketSerializeFail::Header(err))?;
 
     let packet_len_bytes = packet_len_serializer.finish().len();
     let n_shift_packet_len = VAR_INT_BUF_SIZE - packet_len_bytes;
     move_data_rightwards(
-        &mut buf[packet_len_start_at..HEADER_OFFSET - 1],
+        &mut buf[..HEADER_OFFSET - 1],
         packet_len_bytes,
         n_shift_packet_len,
     );
 
-    let start_offset = packet_len_start_at + n_shift_packet_len;
-    let end_at = start_offset + packet_len_bytes + 1 + body_size;
-    buf[start_offset + packet_len_bytes] = 0; // data_len = 0
-    Ok(&mut buf[start_offset..end_at])
+    let end_at = n_shift_packet_len + packet_len_bytes + 1 + body_size;
+    buf[HEADER_OFFSET - 1] = 0; // data_len = 0
+    Ok(&mut buf[n_shift_packet_len..end_at])
 }
 
 #[cfg(feature = "encryption")]

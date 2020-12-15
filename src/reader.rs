@@ -13,7 +13,6 @@ use mcproto_rs::{Deserialize, Deserialized};
 use std::backtrace::Backtrace;
 use std::io;
 use thiserror::Error;
-
 #[cfg(any(feature = "futures-io", feature = "tokio-io"))]
 use async_trait::async_trait;
 
@@ -114,7 +113,7 @@ pub trait CraftSyncReader {
         P: RawPacket<'a>;
 
     #[cfg(feature = "gat")]
-    fn read_raw_packet<'a, P>(&'a mut self) -> ReadResult<P::RawPacket<'a>>
+    fn read_raw_packet<P>(&mut self) -> ReadResult<P::RawPacket<'_>>
     where
         P: PacketKind;
 }
@@ -191,11 +190,11 @@ where
     }
 
     #[cfg(feature = "gat")]
-    fn read_raw_packet<'a, P>(&'a mut self) -> ReadResult<P::RawPacket<'a>>
+    fn read_raw_packet<P>(&mut self) -> ReadResult<P::RawPacket<'_>>
     where
         P: PacketKind
     {
-        self.read_raw_packet_inner::<P::RawPacket<'a>>()
+        self.read_raw_packet_inner::<P::RawPacket<'_>>()
     }
 }
 
