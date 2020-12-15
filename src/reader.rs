@@ -495,7 +495,7 @@ impl<R> CraftReader<R> {
                 Err(err) => Err(err.into()),
             }
         } else {
-            None
+            Ok(None)
         }
     }
 
