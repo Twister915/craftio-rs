@@ -7,14 +7,14 @@ license = "APACHE 2.0"
 
 [dependencies]
 mcproto-rs = { git = "https://github.com/Twister915/mcproto-rs", branch = "master", features = ["std"], default-features = false }
-aes = { version = "0.6.0", optional = true }
+aes = { version = "0.6", optional = true }
 flate2 = { version = "1.0", features = ["zlib"], optional = true }
 
 thiserror = "1.0"
 
-futures = { version = "0.3.8", optional = true }
-async-trait = { version = "0.1.42", optional = true }
-tokio = { version = "0.3", features = ["net", "io-util"], optional = true }
+futures = { version = "0.3", optional = true }
+async-trait = { version = "0.1", optional = true }
+tokio = { version = "1.0", features = ["net", "io-util"], optional = true }
 
 [features]
 default = [ "compression", "encryption", "tokio-io" ]
