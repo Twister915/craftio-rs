@@ -16,6 +16,8 @@ use thiserror::Error;
 #[cfg(any(feature = "futures-io", feature = "tokio-io"))]
 use async_trait::async_trait;
 
+pub const MAX_PACKET_SIZE: usize = 32 * 1000 * 1000;
+
 #[derive(Debug, Error)]
 pub enum ReadError {
     #[error("i/o failure during read")]
@@ -259,7 +261,14 @@ where
     fn read_raw_inner(&mut self) -> ReadResult<usize> {
         self.move_ready_data_to_front();
         let primary_packet_len = rr_unwrap!(self.read_packet_len_sync()).0 as usize;
-        self.ensure_n_ready_sync(primary_packet_len)?;
+        if primary_packet_len > MAX_PACKET_SIZE {
+            return Ok(None);
+        }
+
+        if self.ensure_n_ready_sync(primary_packet_len)?.is_none() {
+            return Ok(None);
+        }
+
         Ok(Some(primary_packet_len))
     }
 
@@ -312,12 +321,19 @@ where
     async fn read_raw_inner_async(&mut self) -> ReadResult<usize> {
         self.move_ready_data_to_front();
         let primary_packet_len = rr_unwrap!(self.read_packet_len_async().await).0 as usize;
-        self.ensure_n_ready_async(primary_packet_len).await?;
+        if primary_packet_len > MAX_PACKET_SIZE {
+            return Ok(None);
+        }
+
+        if self.ensure_n_ready_async(primary_packet_len).await?.is_none() {
+            return Ok(None);
+        }
+
+        debug_assert!(self.raw_ready >= primary_packet_len, "{} packet len bytes are ready (actual: {})", primary_packet_len, self.raw_ready);
         Ok(Some(primary_packet_len))
     }
 
     async fn read_packet_len_async(&mut self) -> ReadResult<VarInt> {
-        self.move_ready_data_to_front();
         let buf = rr_unwrap!(self.ensure_n_ready_async(VAR_INT_BUF_SIZE).await);
         let (v, size) = rr_unwrap!(deserialize_varint(buf));
         self.raw_ready -= size;
@@ -330,11 +346,13 @@ where
             let to_read = n - self.raw_ready;
             let target =
                 get_sized_buf(&mut self.raw_buf, self.raw_offset + self.raw_ready, to_read);
+            debug_assert_eq!(target.len(), to_read);
             check_unexpected_eof!(self.inner.read_exact(target).await);
             self.raw_ready = n;
         }
 
         let ready = get_sized_buf(&mut self.raw_buf, self.raw_offset, n);
+        debug_assert_eq!(ready.len(), n);
         Ok(Some(ready))
     }
 }
@@ -440,7 +458,7 @@ impl<R> CraftReader<R> {
         // find data in buf
         let offset = self.raw_offset;
         if self.raw_ready < size {
-            panic!("not enough data is ready!");
+            panic!("not enough data is ready, got {} ready and {} desired ready!", self.raw_ready, size);
         }
         self.raw_ready -= size;
         self.raw_offset += size;
@@ -507,12 +525,7 @@ impl<R> CraftReader<R> {
                 .as_mut()
                 .expect("if raw_ready > 0 and raw_offset > 0 then a raw_buf should exist!");
 
-            unsafe {
-                let dest = raw_buf.as_mut_ptr();
-                let src = dest.offset(self.raw_offset as isize);
-                let n_copy = self.raw_ready;
-                std::ptr::copy(src, dest, n_copy);
-            }
+            raw_buf.copy_within(self.raw_offset..(self.raw_offset+self.raw_ready), 0);
         }
 
         self.raw_offset = 0;

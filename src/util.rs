@@ -17,18 +17,8 @@ pub(crate) fn get_sized_buf(buf: &mut Option<Vec<u8>>, offset: usize, size: usiz
 }
 
 fn ensure_buf_has_size(buf: &mut Vec<u8>, total_size: usize) {
-    let cur_len = buf.len();
-    if cur_len >= total_size {
-        return;
-    }
-
-    let additional = total_size - cur_len;
-    buf.reserve(additional);
-    unsafe {
-        let start_at = buf.as_mut_ptr();
-        let start_write_at = start_at.offset(cur_len as isize);
-        std::ptr::write_bytes(start_write_at, 0, additional);
-        buf.set_len(total_size);
+    if total_size > buf.len() {
+        buf.resize(total_size, 0u8);
     }
 }
 
@@ -42,15 +32,5 @@ pub(crate) fn move_data_rightwards(target: &mut [u8], size: usize, shift_amount:
         )
     }
 
-    unsafe { move_data_rightwards_unchecked(target, size, shift_amount) }
-}
-
-unsafe fn move_data_rightwards_unchecked(target: &mut [u8], size: usize, shift_amount: usize) {
-    if shift_amount == 0 {
-        return;
-    }
-
-    let src_ptr = target.as_mut_ptr();
-    let dst_ptr = src_ptr.offset(shift_amount as isize);
-    std::ptr::copy(src_ptr, dst_ptr, size);
+    target.copy_within(0..size, shift_amount);
 }
