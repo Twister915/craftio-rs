@@ -47,4 +47,17 @@ pub trait CraftIo {
     /// error is returned and nothing in the underlying state is changed.
     ///
     fn enable_encryption(&mut self, key: &[u8], iv: &[u8]) -> Result<(), CipherError>;
+
+    ///
+    /// Sets the max packet size which this I/O wrapper will decode or transmit.
+    ///
+    /// This limit is meant to be used to ensure connections never allocate gigantic buffers.
+    /// Therefore, the limitation applies to the representation of packet in memory. This means
+    /// that a reader cannot read a compressed packet above this threshold, nor can it decompress
+    /// to a packet which is above this threshold. A writer cannot write a packet which exceeds
+    /// this size (when serialized) even if compression is enabled.
+    ///
+    /// todo split the compressed vs not compressed limits?
+    ///
+    fn set_max_packet_size(&mut self, max_size: usize);
 }

@@ -41,6 +41,11 @@ impl<R, W> CraftIo for CraftConnection<R, W> {
         self.writer.enable_encryption(key, iv)?;
         Ok(())
     }
+
+    fn set_max_packet_size(&mut self, max_size: usize) {
+        self.reader.set_max_packet_size(max_size);
+        self.writer.set_max_packet_size(max_size);
+    }
 }
 
 impl<R, W> CraftSyncReader for CraftConnection<R, W>

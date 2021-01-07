@@ -2,6 +2,7 @@
 use crate::cfb8::{setup_craft_cipher, CipherError, CraftCipher};
 use crate::util::{get_sized_buf, move_data_rightwards, VAR_INT_BUF_SIZE};
 use crate::wrapper::{CraftIo, CraftWrapper};
+use crate::DEAFULT_MAX_PACKET_SIZE;
 #[cfg(feature = "compression")]
 use flate2::{CompressError, Compression, FlushCompress, Status};
 use mcproto_rs::protocol::{Id, Packet, PacketDirection, RawPacket, State};
@@ -58,6 +59,13 @@ pub enum WriteError {
         #[cfg(feature = "backtrace")]
         backtrace: Backtrace,
     },
+    #[error("packet size {size} exceeds maximum size {max_size}")]
+    PacketTooLarge {
+        size: usize,
+        max_size: usize,
+        #[cfg(feature = "backtrace")]
+        backtrace: Backtrace,
+    }
 }
 
 #[derive(Debug, Error)]
@@ -180,6 +188,7 @@ pub struct CraftWriter<W> {
     direction: PacketDirection,
     #[cfg(feature = "encryption")]
     encryption: Option<CraftCipher>,
+    max_packet_size: usize,
 }
 
 impl<W> CraftWrapper<W> for CraftWriter<W> {
@@ -201,6 +210,11 @@ impl<W> CraftIo for CraftWriter<W> {
     #[cfg(feature = "encryption")]
     fn enable_encryption(&mut self, key: &[u8], iv: &[u8]) -> Result<(), CipherError> {
         setup_craft_cipher(&mut self.encryption, key, iv)
+    }
+
+    fn set_max_packet_size(&mut self, max_size: usize) {
+        debug_assert!(max_size > 5);
+        self.max_packet_size = max_size;
     }
 }
 
@@ -370,6 +384,7 @@ impl<W> CraftWriter<W> {
             direction,
             #[cfg(feature = "encryption")]
             encryption: None,
+            max_packet_size: DEAFULT_MAX_PACKET_SIZE,
         }
     }
 
@@ -423,6 +438,14 @@ impl<W> CraftWriter<W> {
         let id_size = self.serialize_id_to_buf(packet.id())?;
         let packet_data = packet.data();
         let data_size = packet_data.len();
+        if data_size > self.max_packet_size {
+            return Err(WriteError::PacketTooLarge {
+                size: data_size,
+                max_size: self.max_packet_size,
+                #[cfg(feature = "backtrace")]
+                backtrace: Backtrace::capture()
+            })
+        }
         let buf = get_sized_buf(&mut self.raw_buf, HEADER_OFFSET, id_size + data_size);
 
         (&mut buf[id_size..]).copy_from_slice(packet_data);
@@ -459,9 +482,19 @@ impl<W> CraftWriter<W> {
     where
         F: FnOnce(&mut GrowVecSerializer<'a>) -> Result<(), WriteError>,
     {
-        let mut serializer = GrowVecSerializer::create(&mut self.raw_buf, offset);
+        let mut serializer = GrowVecSerializer::create(&mut self.raw_buf, offset, self.max_packet_size);
         f(&mut serializer)?;
-        Ok(serializer.finish().map(move |b| b.len()).unwrap_or(0))
+        let packet_size = serializer.written_data_len();
+        if serializer.exceeded_max_size {
+            Err(WriteError::PacketTooLarge {
+                size: packet_size,
+                max_size: self.max_packet_size,
+                #[cfg(feature = "backtrace")]
+                backtrace: Backtrace::capture(),
+            })
+        } else {
+            Ok(packet_size)
+        }
     }
 }
 
@@ -567,31 +600,41 @@ struct GrowVecSerializer<'a> {
     target: &'a mut Option<Vec<u8>>,
     at: usize,
     offset: usize,
+    max_size: usize,
+    exceeded_max_size: bool,
 }
 
 impl<'a> Serializer for GrowVecSerializer<'a> {
     fn serialize_bytes(&mut self, data: &[u8]) -> SerializeResult {
-        get_sized_buf(self.target, self.at + self.offset, data.len()).copy_from_slice(data);
+        if !self.exceeded_max_size {
+            let cur_len = self.at - self.offset;
+            let new_len = cur_len + data.len();
+            if new_len > self.max_size {
+                self.exceeded_max_size = true;
+            } else {
+                get_sized_buf(self.target, self.at + self.offset, data.len()).copy_from_slice(data);
+            }
+        }
+
         self.at += data.len();
+
         Ok(())
     }
 }
 
 impl<'a> GrowVecSerializer<'a> {
-    fn create(target: &'a mut Option<Vec<u8>>, offset: usize) -> Self {
+    fn create(target: &'a mut Option<Vec<u8>>, offset: usize, max_size: usize) -> Self {
         Self {
             target,
             at: 0,
             offset,
+            max_size,
+            exceeded_max_size: false,
         }
     }
 
-    fn finish(self) -> Option<&'a mut [u8]> {
-        if let Some(buf) = self.target {
-            Some(&mut buf[self.offset..self.offset + self.at])
-        } else {
-            None
-        }
+    fn written_data_len(&self) -> usize {
+        self.at - self.offset
     }
 }
 

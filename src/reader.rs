@@ -16,7 +16,7 @@ use thiserror::Error;
 #[cfg(any(feature = "futures-io", feature = "tokio-io"))]
 use async_trait::async_trait;
 
-pub const MAX_PACKET_SIZE: usize = 32 * 1000 * 1000;
+pub const DEAFULT_MAX_PACKET_SIZE: usize = 32 * 1000 * 1000; // 32MB
 
 #[derive(Debug, Error)]
 pub enum ReadError {
@@ -49,6 +49,13 @@ pub enum ReadError {
         #[cfg(feature = "backtrace")]
         backtrace: Backtrace,
     },
+    #[error("{size} exceeds max size of {max_size}")]
+    PacketTooLarge {
+        size: usize,
+        max_size: usize,
+        #[cfg(feature = "backtrace")]
+        backtrace: Backtrace,
+    }
 }
 
 #[cfg(feature = "compression")]
@@ -129,6 +136,7 @@ pub struct CraftReader<R> {
     raw_buf: Option<Vec<u8>>,
     raw_ready: usize,
     raw_offset: usize,
+    max_packet_size: usize,
     #[cfg(feature = "compression")]
     decompress_buf: Option<Vec<u8>>,
     #[cfg(feature = "compression")]
@@ -158,6 +166,11 @@ impl<R> CraftIo for CraftReader<R> {
     #[cfg(feature = "encryption")]
     fn enable_encryption(&mut self, key: &[u8], iv: &[u8]) -> Result<(), CipherError> {
         setup_craft_cipher(&mut self.encryption, key, iv)
+    }
+
+    fn set_max_packet_size(&mut self, max_size: usize) {
+        debug_assert!(max_size > 5);
+        self.max_packet_size = max_size;
     }
 }
 
@@ -261,8 +274,13 @@ where
     fn read_raw_inner(&mut self) -> ReadResult<usize> {
         self.move_ready_data_to_front();
         let primary_packet_len = rr_unwrap!(self.read_packet_len_sync()).0 as usize;
-        if primary_packet_len > MAX_PACKET_SIZE {
-            return Ok(None);
+        if primary_packet_len > self.max_packet_size {
+            return Err(ReadError::PacketTooLarge {
+                size: primary_packet_len,
+                max_size: self.max_packet_size,
+                #[cfg(feature="backtrace")]
+                backtrace: Backtrace::capture(),
+            });
         }
 
         if self.ensure_n_ready_sync(primary_packet_len)?.is_none() {
@@ -321,8 +339,13 @@ where
     async fn read_raw_inner_async(&mut self) -> ReadResult<usize> {
         self.move_ready_data_to_front();
         let primary_packet_len = rr_unwrap!(self.read_packet_len_async().await).0 as usize;
-        if primary_packet_len > MAX_PACKET_SIZE {
-            return Ok(None);
+        if primary_packet_len > self.max_packet_size {
+            return Err(ReadError::PacketTooLarge {
+                size: primary_packet_len,
+                max_size: self.max_packet_size,
+                #[cfg(feature="backtrace")]
+                backtrace: Backtrace::capture(),
+            });
         }
 
         if self.ensure_n_ready_async(primary_packet_len).await?.is_none() {
@@ -450,6 +473,7 @@ impl<R> CraftReader<R> {
             direction,
             #[cfg(feature = "encryption")]
             encryption: None,
+            max_packet_size: DEAFULT_MAX_PACKET_SIZE
         }
     }
 
@@ -483,6 +507,13 @@ impl<R> CraftReader<R> {
             let data_len = data_len.0 as usize;
             if data_len == 0 {
                 rest
+            } else if data_len >= self.max_packet_size {
+                return Err(ReadError::PacketTooLarge {
+                    size: data_len,
+                    max_size: self.max_packet_size,
+                    #[cfg(feature = "backtrace")]
+                    backtrace: Backtrace::capture()
+                })
             } else {
                 decompress(rest, &mut self.decompress_buf, data_len)?
             }
