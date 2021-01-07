@@ -607,7 +607,7 @@ struct GrowVecSerializer<'a> {
 impl<'a> Serializer for GrowVecSerializer<'a> {
     fn serialize_bytes(&mut self, data: &[u8]) -> SerializeResult {
         if !self.exceeded_max_size {
-            let cur_len = self.at - self.offset;
+            let cur_len = self.written_data_len();
             let new_len = cur_len + data.len();
             if new_len > self.max_size {
                 self.exceeded_max_size = true;
@@ -634,7 +634,7 @@ impl<'a> GrowVecSerializer<'a> {
     }
 
     fn written_data_len(&self) -> usize {
-        self.at - self.offset
+        self.at
     }
 }
 
