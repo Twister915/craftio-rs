@@ -46,6 +46,17 @@ impl<R, W> CraftIo for CraftConnection<R, W> {
         self.reader.set_max_packet_size(max_size);
         self.writer.set_max_packet_size(max_size);
     }
+
+    fn ensure_buf_capacity(&mut self, capacity: usize) {
+        self.reader.ensure_buf_capacity(capacity);
+        self.writer.ensure_buf_capacity(capacity);
+    }
+
+    #[cfg(feature = "compression")]
+    fn ensure_compression_buf_capacity(&mut self, capacity: usize) {
+        self.reader.ensure_buf_capacity(capacity);
+        self.writer.ensure_buf_capacity(capacity);
+    }
 }
 
 impl<R, W> CraftSyncReader for CraftConnection<R, W>

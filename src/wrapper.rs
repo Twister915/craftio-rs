@@ -28,7 +28,6 @@ pub trait CraftIo {
     fn set_state(&mut self, next: State);
 
 
-    #[cfg(feature = "compression")]
     ///
     /// Modifies the compression configuration. If a value of `None` is provided, then compression is
     /// disabled. If a value of `Some` is provided, then the threshold is set to that value.
@@ -36,9 +35,9 @@ pub trait CraftIo {
     /// If a 0 or negative value is provided in a `Some` variant, then it is the same as calling
     /// this function with the `None` variant
     ///
+    #[cfg(feature = "compression")]
     fn set_compression_threshold(&mut self, threshold: Option<i32>);
 
-    #[cfg(feature = "encryption")]
     ///
     /// Modifies the encryption configuration. This function should only be called once, and can only
     /// be used to enable encryption.
@@ -46,6 +45,7 @@ pub trait CraftIo {
     /// If encryption is already enabled or the arguments are not valid for the cipher, then an
     /// error is returned and nothing in the underlying state is changed.
     ///
+    #[cfg(feature = "encryption")]
     fn enable_encryption(&mut self, key: &[u8], iv: &[u8]) -> Result<(), CipherError>;
 
     ///
@@ -60,4 +60,9 @@ pub trait CraftIo {
     /// todo split the compressed vs not compressed limits?
     ///
     fn set_max_packet_size(&mut self, max_size: usize);
+
+    fn ensure_buf_capacity(&mut self, capacity: usize);
+
+    #[cfg(feature = "compression")]
+    fn ensure_compression_buf_capacity(&mut self, capacity: usize);
 }

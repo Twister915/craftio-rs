@@ -216,6 +216,23 @@ impl<W> CraftIo for CraftWriter<W> {
         debug_assert!(max_size > 5);
         self.max_packet_size = max_size;
     }
+
+    fn ensure_buf_capacity(&mut self, capacity: usize) {
+        get_sized_buf(&mut self.raw_buf, 0, if capacity > self.max_packet_size {
+            self.max_packet_size
+        } else {
+            capacity
+        });
+    }
+
+    #[cfg(feature = "compression")]
+    fn ensure_compression_buf_capacity(&mut self, capacity: usize) {
+        get_sized_buf(&mut self.compress_buf, 0, if capacity > self.max_packet_size {
+            self.max_packet_size
+        } else {
+            capacity
+        });
+    }
 }
 
 impl<W> CraftSyncWriter for CraftWriter<W>

@@ -172,6 +172,26 @@ impl<R> CraftIo for CraftReader<R> {
         debug_assert!(max_size > 5);
         self.max_packet_size = max_size;
     }
+
+    fn ensure_buf_capacity(&mut self, capacity: usize) {
+        let alloc_to = if capacity > self.max_packet_size {
+            self.max_packet_size
+        } else {
+            capacity
+        };
+        self.move_ready_data_to_front();
+        get_sized_buf(&mut self.raw_buf, 0, alloc_to);
+    }
+
+    #[cfg(feature = "compression")]
+    fn ensure_compression_buf_capacity(&mut self, capacity: usize) {
+        let alloc_to = if capacity > self.max_packet_size {
+            self.max_packet_size
+        } else {
+            capacity
+        };
+        get_sized_buf(&mut self.decompress_buf, 0, alloc_to);
+    }
 }
 
 macro_rules! rr_unwrap {
