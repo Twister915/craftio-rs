@@ -131,6 +131,16 @@ pub trait CraftSyncReader {
     fn read_raw_untyped_packet(&mut self) -> ReadResult<(Id, &[u8])>;
 }
 
+///
+/// Wraps some stream of type `R`, and implements either `CraftSyncReader` or `CraftAsyncReader` (or both)
+/// based on what types `R` implements.
+///
+/// You can construct this type calling the function `wrap_with_state`, which requires you to specify
+/// a packet direction (are written packets server-bound or client-bound?) and a state
+/// (`handshaking`? `login`? `status`? `play`?).
+///
+/// This type holds some internal buffers but only allocates them when they are required.
+///
 pub struct CraftReader<R> {
     inner: R,
     raw_buf: Option<Vec<u8>>,
