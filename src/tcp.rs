@@ -6,14 +6,30 @@ use std::io::BufReader as StdBufReader;
 use std::net::TcpStream;
 
 #[cfg(any(feature = "futures-io", feature = "tokio-io"))]
-use crate::{CraftAsyncReader, CraftAsyncWriter, IntoBufferedAsyncRead};
+use crate::{CraftAsyncReader, CraftAsyncWriter};
+
+#[cfg(feature = "tokio-io")]
+use tokio::{
+    net::{
+        TcpStream as TokioTcpStream,
+        tcp::{
+            OwnedReadHalf as TokioReadHalf,
+            OwnedWriteHalf as TokioWriteHalf,
+        },
+        ToSocketAddrs as TokioToSocketAddrs,
+    },
+    io::{
+        BufReader as TokioBufReader,
+        Error as TokioIoError,
+    },
+};
 
 pub const BUF_SIZE: usize = 8192;
 
 pub type CraftTcpConnection = CraftConnection<StdBufReader<TcpStream>, TcpStream>;
 
-impl CraftConnection<StdBufReader<TcpStream>, TcpStream> {
-    pub fn connect_server_std(to: String) -> Result<Self, std::io::Error> {
+impl CraftTcpConnection {
+    pub fn connect_server_std<A>(to: A) -> Result<Self, std::io::Error> where A: std::net::ToSocketAddrs {
         Self::from_std(TcpStream::connect(to)?, PacketDirection::ClientBound)
     }
 
@@ -43,32 +59,52 @@ impl CraftConnection<StdBufReader<TcpStream>, TcpStream> {
     }
 }
 
+#[cfg(feature = "tokio-io")]
+pub type CraftTokioConnection = CraftConnection<TokioBufReader<TokioReadHalf>, TokioWriteHalf>;
+
+#[cfg(feature = "tokio-io")]
+impl CraftTokioConnection {
+    pub async fn connect_server_tokio<A>(
+        to: A
+    ) -> Result<Self, TokioIoError>
+    where
+        A: TokioToSocketAddrs
+    {
+        let conn = TokioTcpStream::connect(to).await?;
+        conn.set_nodelay(true)?;
+        let (reader, writer) = conn.into_split();
+        let reader = TokioBufReader::with_capacity(BUF_SIZE, reader);
+        Ok(Self::from_async((reader, writer), PacketDirection::ClientBound))
+    }
+}
+
+#[cfg(feature = "tokio-io")]
+pub type CraftUnbufferedTokioConnection = CraftConnection<TokioReadHalf, TokioWriteHalf>;
+
+#[cfg(feature = "tokio-io")]
+impl CraftUnbufferedTokioConnection {
+    pub async fn connect_server_tokio_unbuffered<A>(
+        to: A
+    ) -> Result<Self, TokioIoError>
+    where
+        A: TokioToSocketAddrs
+    {
+        let conn = TokioTcpStream::connect(to).await?;
+        conn.set_nodelay(true)?;
+
+        Ok(Self::from_async(
+            conn.into_split(),
+            PacketDirection::ClientBound,
+        ))
+    }
+}
+
 #[cfg(any(feature = "futures-io", feature = "tokio-io"))]
 impl<R, W> CraftConnection<R, W>
 where
     CraftReader<R>: CraftAsyncReader,
     CraftWriter<W>: CraftAsyncWriter,
 {
-    pub fn from_unbuffered_async<U>(tuple: (U, W), read_direction: PacketDirection) -> Self
-    where
-        U: IntoBufferedAsyncRead<Target = R>,
-    {
-        Self::from_unbuffered_async_with_state(tuple, read_direction, State::Handshaking)
-    }
-
-    pub fn from_unbuffered_async_with_state<U>(
-        tuple: (U, W),
-        read_direction: PacketDirection,
-        state: State,
-    ) -> Self
-    where
-        U: IntoBufferedAsyncRead<Target = R>,
-    {
-        let (ru, writer) = tuple;
-        let reader = ru.into_buffered(BUF_SIZE);
-        Self::from_async_with_state((reader, writer), read_direction, state)
-    }
-
     pub fn from_async(tuple: (R, W), read_direction: PacketDirection) -> Self {
         Self::from_async_with_state(tuple, read_direction, State::Handshaking)
     }

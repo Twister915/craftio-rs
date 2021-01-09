@@ -401,37 +401,6 @@ where
 }
 
 #[cfg(any(feature = "futures-io", feature = "tokio-io"))]
-pub trait IntoBufferedAsyncRead {
-    type Target: AsyncReadExact;
-
-    fn into_buffered(self, capacity: usize) -> Self::Target;
-}
-
-#[cfg(all(feature = "futures-io", not(feature = "tokio-io")))]
-impl<R> IntoBufferedAsyncRead for R
-where
-    R: futures::io::AsyncRead + Send + Sync + Unpin,
-{
-    type Target = futures::io::BufReader<R>;
-
-    fn into_buffered(self, capacity: usize) -> Self::Target {
-        futures::io::BufReader::with_capacity(capacity, self)
-    }
-}
-
-#[cfg(feature = "tokio-io")]
-impl<R> IntoBufferedAsyncRead for R
-where
-    R: tokio::io::AsyncRead + Send + Sync + Unpin,
-{
-    type Target = tokio::io::BufReader<R>;
-
-    fn into_buffered(self, capacity: usize) -> Self::Target {
-        tokio::io::BufReader::with_capacity(capacity, self)
-    }
-}
-
-#[cfg(any(feature = "futures-io", feature = "tokio-io"))]
 #[async_trait]
 pub trait AsyncReadExact: Unpin + Sync + Send {
     async fn read_exact(&mut self, to: &mut [u8]) -> Result<(), io::Error>;
