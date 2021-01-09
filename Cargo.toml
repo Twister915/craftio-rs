@@ -4,6 +4,10 @@ version = "0.1.0"
 authors = ["Joey Sacchini <joey@sacchini.net>"]
 edition = "2018"
 license = "APACHE 2.0"
+description = "A crate to read & write packets defined in mcproto-rs to I/O sinks/sources"
+homepage = "https://github.com/Twister915/craftio-rs"
+repository = "https://github.com/Twister915/craftio-rs"
+readme = "README.md"
 
 [dependencies]
 mcproto-rs = { git = "https://github.com/Twister915/mcproto-rs", branch = "master", features = ["std"], default-features = false }
