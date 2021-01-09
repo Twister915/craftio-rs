@@ -11,7 +11,7 @@ repository = "https://github.com/Twister915/craftio-rs"
 readme = "README.md"
 
 [dependencies]
-mcproto-rs = { version = "0.2.0", branch = "master", features = ["std"], default-features = false }
+mcproto-rs = { version = "0.2.0", features = ["std"], default-features = false }
 aes = { version = "0.6", optional = true }
 flate2 = { version = "1.0", features = ["zlib"], optional = true }
 
