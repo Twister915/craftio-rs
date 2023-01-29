@@ -1,20 +1,22 @@
-#[cfg(feature = "encryption")]
-use crate::cfb8::{setup_craft_cipher, CipherError, CraftCipher};
-use crate::util::{get_sized_buf, VAR_INT_BUF_SIZE};
-use crate::wrapper::{CraftIo, CraftWrapper};
+#[cfg(feature = "backtrace")]
+use std::backtrace::Backtrace;
+use std::io;
+
+#[cfg(any(feature = "futures-io", feature = "tokio-io"))]
+use async_trait::async_trait;
 #[cfg(feature = "compression")]
 use flate2::{DecompressError, FlushDecompress, Status};
+use mcproto_rs::{Deserialize, Deserialized, DeserializeErr};
 use mcproto_rs::protocol::{Id, PacketDirection, RawPacket, State};
 #[cfg(feature = "gat")]
 use mcproto_rs::protocol::PacketKind;
 use mcproto_rs::types::VarInt;
-use mcproto_rs::{Deserialize, Deserialized};
-#[cfg(feature = "backtrace")]
-use std::backtrace::Backtrace;
-use std::io;
 use thiserror::Error;
-#[cfg(any(feature = "futures-io", feature = "tokio-io"))]
-use async_trait::async_trait;
+
+#[cfg(feature = "encryption")]
+use crate::cfb8::{CipherError, CraftCipher, setup_craft_cipher};
+use crate::util::{get_sized_buf, VAR_INT_BUF_SIZE};
+use crate::wrapper::{CraftIo, CraftWrapper};
 
 pub const DEAFULT_MAX_PACKET_SIZE: usize = 32 * 1000 * 1000; // 32MB
 
@@ -321,11 +323,21 @@ where
     }
 
     fn read_packet_len_sync(&mut self) -> ReadResult<VarInt> {
-        let buf = rr_unwrap!(self.ensure_n_ready_sync(VAR_INT_BUF_SIZE));
-        let (v, size) = rr_unwrap!(deserialize_varint(buf));
-        self.raw_ready -= size;
-        self.raw_offset += size;
-        Ok(Some(v))
+        let mut accumulator = 0u32;
+        let mut position = 0;
+        loop {
+            let buf = rr_unwrap!(self.ensure_n_ready_sync(position + 1));
+            let current_byte = buf[position];
+            accumulator |= (current_byte as u32 & 0x7f) << (position * 7);
+            position += 1;
+            if (current_byte & 0x80) == 0 { break }
+            if position >= 5 {
+                return  Err(DeserializeErr::VarNumTooLong(buf.into()).into())
+            }
+        }
+        self.raw_ready -= position;
+        self.raw_offset += position;
+        Ok(Some(VarInt(accumulator as i32)))
     }
 
     fn ensure_n_ready_sync(&mut self, n: usize) -> ReadResult<&[u8]> {
@@ -387,11 +399,21 @@ where
     }
 
     async fn read_packet_len_async(&mut self) -> ReadResult<VarInt> {
-        let buf = rr_unwrap!(self.ensure_n_ready_async(VAR_INT_BUF_SIZE).await);
-        let (v, size) = rr_unwrap!(deserialize_varint(buf));
-        self.raw_ready -= size;
-        self.raw_offset += size;
-        Ok(Some(v))
+        let mut accumulator = 0u32;
+        let mut position = 0;
+        loop {
+            let buf = rr_unwrap!(self.ensure_n_ready_async(position + 1).await);
+            let current_byte = buf[position];
+            accumulator |= (current_byte as u32 & 0x7f) << (position * 7);
+            position += 1;
+            if (current_byte & 0x80) == 0 { break }
+            if position >= 5 {
+                return Err(DeserializeErr::VarNumTooLong(buf.into()).into())
+            }
+        }
+        self.raw_ready -= position;
+        self.raw_offset += position;
+        Ok(Some(VarInt(accumulator as i32)))
     }
 
     async fn ensure_n_ready_async(&mut self, n: usize) -> ReadResult<&[u8]> {
@@ -580,13 +602,6 @@ where
         },
         Ok(None) => Ok(None),
         Err(err) => Err(err),
-    }
-}
-
-fn deserialize_varint(buf: &[u8]) -> ReadResult<(VarInt, usize)> {
-    match VarInt::mc_deserialize(buf) {
-        Ok(v) => Ok(Some((v.value, buf.len() - v.data.len()))),
-        Err(err) => Err(err.into()),
     }
 }
 
