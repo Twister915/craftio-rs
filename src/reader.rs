@@ -471,8 +471,8 @@ macro_rules! dsz_unwrap {
             Err(err) => {
                 return Err(err.into());
             }
-        };
-    };
+        }
+    }
 }
 
 impl<R> CraftReader<R> {
